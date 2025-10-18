@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "LexiLearn - On-page Vocabulary Coach",
+  "version": "0.1.0",
+  "description": "Highlight unknown English words, show meanings, and save to your vocabulary — all on device.",
+  "icons": {
+    "16": "assets/icon16.png",
+    "48": "assets/icon48.png",
+    "128": "assets/icon128.png"
+  },
+  "action": { "default_popup": "popup.html" },
+  "background": { "service_worker": "background.js" },
+  "permissions": ["storage", "activeTab", "scripting", "sidePanel", "contextMenus"],
+  "host_permissions": [ "<all_urls>"],
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "css": ["styles.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "side_panel": { "default_path": "sidepanel.html" },
+  "web_accessible_resources": [
+    {
+      "resources": ["assets/lists/*.txt"],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}

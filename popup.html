@@ -1,0 +1,59 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>LexiLearn</title>
+    <style>
+      body { font-family: system-ui, -apple-system, Arial; margin: 12px; width: 260px; }
+      .row { display:flex; align-items:center; justify-content:space-between; }
+      button { padding:6px 10px; }
+      small { color:#666; }
+    </style>
+
+    <!-- Highlight Mode -->
+    <div class="row" style="margin-top:10px;">
+      <div>
+        <b>Highlight Mode</b><br/>
+        <small>Choose how to highlight words</small>
+      </div>
+      <select id="mode">
+        <option value="basic">Basic</option>
+        <option value="exclude-cet4">Exclude CET-4</option>
+        <option value="gre-only">GRE Only</option>
+      </select>
+    </div>
+  </head>
+  <!-- Learning Mode -->
+  <body>
+    <h3>LexiLearn</h3>
+    <div class="row">
+      <div>
+        <b>Learning Mode</b><br/>
+        <small>Highlight unknown words on pages</small>
+      </div>
+      <label>
+        <input id="toggle" type="checkbox" />
+      </label>
+    </div>
+    
+    <!-- ✅ Target language (click-to-translate) -->
+    <div class="row" style="margin-top:10px;">
+      <div>
+        <b>Target language</b><br/>
+        <small>Used for click-to-translate</small>
+      </div>
+      <select id="lang">
+        <option value="zh-CN">Chinese (简体)</option>
+        <option value="zh-TW">Chinese (繁體)</option>
+        <option value="ja">Japanese</option>
+        <option value="ko">Korean</option>
+        <option value="es">Spanish</option>
+        <option value="fr">French</option>
+      </select>
+    </div>
+
+    <hr/>
+    <p><a id="openSide" href="#">Open Vocabulary Side Panel</a></p>
+    <script src="popup.js"></script>
+  </body>
+</html>

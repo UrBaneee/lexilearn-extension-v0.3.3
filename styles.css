@@ -1,0 +1,27 @@
+.lexi-mark {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: help;
+  background: rgba(255, 245, 0, 0.12);
+}
+
+#lexi-tooltip {
+  z-index: 2147483647;
+  max-width: 240px;
+  padding: 10px 12px;
+  border: 1px solid #ddd;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 6px 24px rgba(0,0,0,0.12);
+  font-family: system-ui, -apple-system, Arial;
+  font-size: 13px;
+}
+
+#lexi-tooltip .lexi-title { font-weight: 700; margin-bottom: 6px; }
+#lexi-tooltip .lexi-pos { color: #666; margin-left: 6px; font-weight: 400; }
+#lexi-tooltip .lexi-mean { margin-bottom: 8px; }
+#lexi-tooltip .lexi-actions { display:flex; gap:8px; justify-content:flex-end; }
+#lexi-tooltip button {
+  border: 1px solid #ddd; background:#fafafa; border-radius: 8px; padding: 2px 8px; cursor: pointer;
+}
+#lexi-tooltip .lexi-ok { color: #0a7; font-weight: 600; }
