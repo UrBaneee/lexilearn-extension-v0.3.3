@@ -93,8 +93,49 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         sendResponse({ ok: true, data: res });
       }
       if (msg.type === "ADD_VOCAB") {
-        await addToVocab(msg.payload);
+        const v = msg.payload || {};
+        const { vocab = [] } = await chrome.storage.local.get({ vocab: [] });
+
+        // 查重（按 lemma 或 word）
+        const key = (v.lemma || v.word || '').toLowerCase();
+        const idx = vocab.findIndex(x => (x.lemma || x.word || '').toLowerCase() === key);
+
+        if (idx >= 0) {
+          // 合并字段（不覆盖已有非空；追加例句）
+          const cur = vocab[idx];
+          cur.meaning = cur.meaning || v.meaning;
+          cur.url = cur.url || v.url;
+          if (v.example?.text) {
+            cur.examples = cur.examples || [];
+            if (!cur.examples.some(e => e.text === v.example.text)) cur.examples.push(v.example);
+          }
+        } else {
+          const item = {
+            id: crypto.randomUUID?.() || Date.now().toString(36),
+            word: v.word, lemma: v.lemma, meaning: v.meaning, url: v.url,
+            examples: v.example?.text ? [v.example] : []
+          };
+          vocab.push(item);
+        }
+        await chrome.storage.local.set({ vocab });
         sendResponse({ ok: true });
+      }
+
+      if (msg.type === "ADD_EXAMPLE") {
+        const p = msg.payload || {};
+        const { vocab = [] } = await chrome.storage.local.get({ vocab: [] });
+        const key = (p.lemma || p.word || '').toLowerCase();
+        const idx = vocab.findIndex(x => (x.lemma || x.word || '').toLowerCase() === key);
+        if (idx >= 0 && p.example?.text) {
+          vocab[idx].examples = vocab[idx].examples || [];
+          if (!vocab[idx].examples.some(e => e.text === p.example.text)) {
+            vocab[idx].examples.push(p.example);
+          }
+          await chrome.storage.local.set({ vocab });
+          sendResponse({ ok: true });
+        } else {
+          sendResponse({ ok: false });
+        }
       }
       if (msg.type === "TRANSLATE_WORD") {
         const { word, targetLang } = msg.payload || {};

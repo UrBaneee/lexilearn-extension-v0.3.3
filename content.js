@@ -10,6 +10,67 @@ if (root.hasAttribute(LEXI_SENTINEL)) {
   root.setAttribute(LEXI_SENTINEL, 'alive');   // 用 DOM 标记，页面 Console 也能看到
   console.log('[Lexi] initializing fresh content script...');
 
+  // ── Utils: TTS（与 loadTxtSet / onEnter 平级） ──
+  function playPronunciation(word, lang = 'en-US') {
+    try {
+      const utter = new SpeechSynthesisUtterance(word);
+      utter.lang = lang;
+      utter.rate = 0.95;
+      const pick = (voices) =>
+        voices.find(v => v.lang.startsWith('en') && /female|samantha|victoria|allison/i.test(v.name))
+        || voices.find(v => v.lang.startsWith('en'));
+      const voices = speechSynthesis.getVoices();
+      const v = pick(voices);
+      if (v) utter.voice = v;
+      if (!voices.length) {
+        const once = () => {
+          const v2 = pick(speechSynthesis.getVoices());
+          if (v2) utter.voice = v2;
+          speechSynthesis.speak(utter);
+          speechSynthesis.removeEventListener('voiceschanged', once);
+        };
+        speechSynthesis.addEventListener('voiceschanged', once);
+      } else {
+        speechSynthesis.cancel(); // 避免叠音
+        speechSynthesis.speak(utter);
+      }
+    } catch (e) {
+      console.warn('[Lexi] TTS failed:', e);
+    }
+  }
+  // 提取所在句子（从最近段落/标题/列表项里找，按句号切分，选包含目标词的那句）
+  function extractExample(span, word) {
+    const blk = span.closest('p, li, blockquote, h1, h2, h3, h4, h5, h6') || span.parentElement;
+    const raw = (blk?.innerText || '').replace(/\s+/g, ' ').trim();
+    if (!raw) return null;
+
+    const W = word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); // escape
+    const parts = raw.split(/(?<=[.!?])\s+/); // 句子切分（简单够用）
+    let best = parts.find(s => new RegExp(`\\b${W}\\b`, 'i').test(s)) || parts[0] || '';
+    best = best.slice(0, 260); // 控最大长度
+    const html = best.replace(new RegExp(`\\b(${W})\\b`, 'gi'), '<mark class="lexi-mark-in-sent">$1</mark>');
+    return { text: best, html };
+  }
+
+  // 朗读整句（沿用你的 TTS，给句子一个更慢的速率）
+  function speakSentence(text, lang = 'en-US') {
+    try {
+      const u = new SpeechSynthesisUtterance(text);
+      u.lang = lang; u.rate = 0.92;
+      const voices = speechSynthesis.getVoices();
+      const pick = voices.find(v => v.lang.startsWith('en') && /female|samantha|victoria|allison/i.test(v.name))
+        || voices.find(v => v.lang.startsWith('en'));
+      if (pick) u.voice = pick;
+      speechSynthesis.cancel();
+      speechSynthesis.speak(u);
+    } catch (e) { console.warn('[Lexi] speakSentence failed:', e); }
+  }
+
+  // 复制到剪贴板（异步）
+  async function copyText(t) {
+    try { await navigator.clipboard?.writeText(t); return true; } catch { return false; }
+  }
+
 // ↓↓↓ 从这里开始写你原来的初始化逻辑（词表、事件绑定等）↓↓↓
   // ===== Wordlist loader =====
   let WORDLISTS = {
@@ -306,22 +367,88 @@ if (root.hasAttribute(LEXI_SENTINEL)) {
       }
       const { pos, short } = res.data || {};
       tip.innerHTML = `
-        <div class="lexi-title">${word} <span class="lexi-pos">${pos || ""}</span></div>
-        <div class="lexi-mean">${short || ""}</div>
-        <div class="lexi-actions">
-          <button id="lexi-add">＋ Add</button>
-          <button id="lexi-close">×</button>
+        <div class="lexi-head">
+          <div class="lexi-word-row">
+            <span class="lexi-word">${word}</span>
+            <button class="lexi-btn lexi-audio" title="Pronounce">🔊</button>
+            <span class="lexi-pos">${pos || ""}</span>
+            <div class="lexi-spacer"></div>
+            <button class="lexi-btn" id="lexi-add" title="Add to vocab">＋ Add</button>
+            <button class="lexi-btn" id="lexi-close" title="Close">×</button>
+          </div>
         </div>
+        <div class="lexi-mean">${short || ""}</div>
+        <div class="lexi-source">via Chrome built-in AI</div>
       `;
-      document.getElementById("lexi-add").onclick = () => {
-        chrome.runtime.sendMessage({
-          type: "ADD_VOCAB",
-          payload: { word, lemma: span.dataset.lemma, url: location.href, meaning: short }
-        }, () => {
-          tip.innerHTML = `<div class="lexi-ok">Added!</div>`;
+
+      const ex = extractExample(span, word); // ← 新增：抓所在句子
+      tip.innerHTML = `
+        <div class="lexi-head">
+          <div class="lexi-word-row">
+            <span class="lexi-word">${word}</span>
+            <button class="lexi-btn lexi-audio" title="Pronounce">🔊</button>
+            <span class="lexi-pos">${pos || ""}</span>
+            <div class="lexi-spacer"></div>
+            <button class="lexi-btn" id="lexi-add" title="Add to vocab">＋ Add</button>
+            <button class="lexi-btn" id="lexi-close" title="Close">×</button>
+          </div>
+        </div>
+        <div class="lexi-mean">${short || ""}</div>
+        
+        ${ex ? `
+        <div class="lexi-ex">
+          <div class="ex-label">Example</div>
+          <div class="ex-text">${ex.html}</div>
+          <div class="ex-ops">
+            <button class="lexi-btn ex-say" title="Read aloud">🔊</button>
+            <button class="lexi-btn ex-copy" title="Copy sentence">📋</button>
+            <button class="lexi-btn ex-save" title="Save example">☆ Save</button>
+          </div>
+        </div>` : ''}
+
+        <div class="lexi-source">via Chrome built-in AI</div>
+      `;
+
+      // 发音（单词）
+      tip.querySelector('.lexi-audio')?.addEventListener('click', ev => {
+        ev.stopPropagation(); playPronunciation(word);
+      });
+
+      // 保存单词（原有逻辑不变，增加 example 一并保存）
+      document.getElementById("lexi-add").onclick = async () => {
+        const payload = {
+          word,
+          lemma: span.dataset.lemma,
+          url: location.href,
+          meaning: short,
+          example: ex ? { text: ex.text, url: location.href } : undefined
+        };
+        chrome.runtime.sendMessage({ type: "ADD_VOCAB", payload }, () => {
+          tip.querySelector('.lexi-source').textContent = 'Added ✓';
           setTimeout(hideTip, 800);
         });
       };
+
+      // 例句按钮
+      if (ex) {
+        tip.querySelector('.ex-say')?.addEventListener('click', e => { e.stopPropagation(); speakSentence(ex.text); });
+        tip.querySelector('.ex-copy')?.addEventListener('click', async e => {
+          e.stopPropagation();
+          const ok = await copyText(ex.text);
+          const btn = e.currentTarget; btn.textContent = ok ? '✓ Copied' : '⚠︎ Retry'; setTimeout(() => btn.textContent = '📋', 900);
+        });
+        tip.querySelector('.ex-save')?.addEventListener('click', e => {
+          e.stopPropagation();
+          chrome.runtime.sendMessage({
+            type: "ADD_EXAMPLE", payload: {
+              word, lemma: span.dataset.lemma, example: { text: ex.text, url: location.href }
+            }
+          }, () => {
+            const b = e.currentTarget; b.textContent = '★ Saved'; setTimeout(() => b.textContent = '☆ Save', 1000);
+          });
+        });
+      }
+
       document.getElementById("lexi-close").onclick = hideTip;
       showTipNear(span);
     });
@@ -454,6 +581,11 @@ if (root.hasAttribute(LEXI_SENTINEL)) {
   // 点击页面：若点到高亮词 → 翻译；否则点空白处关闭 tooltip
   document.addEventListener("click", (e) => {
     if (!tip.contains(e.target)) hideTip();
+  }, true);
+
+  // 新增：按 Esc 关闭 tooltip
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") hideTip();
   }, true);
   // ── 可选：自动检测扩展上下文失效并提示刷新（5s一次）
   setInterval(() => {

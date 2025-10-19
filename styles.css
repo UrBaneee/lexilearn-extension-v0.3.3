@@ -5,23 +5,141 @@
   background: rgba(255, 245, 0, 0.12);
 }
 
+/* Tooltip layout */
 #lexi-tooltip {
-  z-index: 2147483647;
-  max-width: 240px;
-  padding: 10px 12px;
-  border: 1px solid #ddd;
-  border-radius: 10px;
+  font-family: system-ui, -apple-system, "Segoe UI", Inter, "Noto Sans SC", sans-serif;
+  max-width: 360px;
   background: #fff;
-  box-shadow: 0 6px 24px rgba(0,0,0,0.12);
-  font-family: system-ui, -apple-system, Arial;
+  border: 1px solid rgba(0, 0, 0, .08);
+  border-radius: 12px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .12);
+  padding: 10px 12px;
+  line-height: 1.5;
+  z-index: 2147483647;
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, .18);
+  animation: lexi-fade-up .18s ease-out;
+  background:
+      linear-gradient(180deg, rgba(255, 255, 255, .9), rgba(255, 255, 255, .85)) padding-box,
+      linear-gradient(135deg, rgba(99, 102, 241, .35), rgba(236, 72, 153, .35)) border-box;
+}
+
+#lexi-tooltip .lexi-head {
+  margin-bottom: 6px;
+}
+
+#lexi-tooltip .lexi-word-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+#lexi-tooltip .lexi-word {
+  font-weight: 700;
+  font-size: 16px;
+}
+
+#lexi-tooltip .lexi-pos {
+  color: #6b7280;
+  font-size: 12px;
+}
+
+#lexi-tooltip .lexi-spacer {
+  flex: 1;
+}
+
+#lexi-tooltip .lexi-mean {
+  margin-top: 4px;
+}
+
+#lexi-tooltip .lexi-source {
+  margin-top: 8px;
+  color: #9ca3af;
+  font-size: 12px;
+}
+
+/* Buttons */
+#lexi-tooltip .lexi-btn {
+  appearance: none;
+  border: 1px solid rgba(0, 0, 0, .08);
+  background: #f9fafb;
+  padding: 2px 8px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+#lexi-tooltip .lexi-btn:hover {
+  background: #eef2ff;
+  border-color: #c7d2fe;
+}
+
+#lexi-tooltip .lexi-audio {
+  padding: 2px 6px;
+}
+
+/* Dark mode */
+@media (prefers-color-scheme: dark) {
+  #lexi-tooltip {
+    background: #111827;
+    color: #e5e7eb;
+    border-color: #1f2937;
+  }
+
+  #lexi-tooltip .lexi-source {
+    color: #9ca3af;
+  }
+
+  #lexi-tooltip .lexi-btn {
+    background: #1f2937;
+    color: #e5e7eb;
+    border-color: #374151;
+  }
+
+  #lexi-tooltip .lexi-btn:hover {
+    background: #374151;
+  }
+}
+
+@keyframes lexi-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(.98);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* 例句区块 */
+#lexi-tooltip .lexi-ex {
+  margin-top: 8px;
+  padding: 8px;
+  border: 1px dashed rgba(0, 0, 0, .1);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, .02);
+}
+
+#lexi-tooltip .lexi-ex .ex-label {
+  font-size: 12px;
+  color: #6b7280;
+  margin-bottom: 4px;
+}
+
+#lexi-tooltip .lexi-ex .ex-text {
   font-size: 13px;
 }
 
-#lexi-tooltip .lexi-title { font-weight: 700; margin-bottom: 6px; }
-#lexi-tooltip .lexi-pos { color: #666; margin-left: 6px; font-weight: 400; }
-#lexi-tooltip .lexi-mean { margin-bottom: 8px; }
-#lexi-tooltip .lexi-actions { display:flex; gap:8px; justify-content:flex-end; }
-#lexi-tooltip button {
-  border: 1px solid #ddd; background:#fafafa; border-radius: 8px; padding: 2px 8px; cursor: pointer;
+#lexi-tooltip mark.lexi-mark-in-sent {
+  background: linear-gradient(to top, rgba(255, 235, 59, .6), rgba(255, 235, 59, .1));
+  border-radius: 4px;
+  padding: 0 2px;
 }
-#lexi-tooltip .lexi-ok { color: #0a7; font-weight: 600; }
+
+#lexi-tooltip .lexi-ex .ex-ops {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
