@@ -1,3 +1,21 @@
+// 记录每种 targetLang 是否已预热
+const __lexiWarm = new Map();
+
+async function ensureTranslatorWarmed() {
+  // 读取当前目标语言
+  const { targetLang = 'zh-CN' } = await new Promise(r => chrome.storage.local.get({ targetLang: 'zh-CN' }, r));
+  if (__lexiWarm.get(targetLang)) return true;
+
+  try {
+    const tr = await getOrCreateTranslator(targetLang, { requireGesture: true });
+    if (tr) {
+      __lexiWarm.set(targetLang, true);
+      return true;
+    }
+  } catch { }
+  return false;
+}
+
 // ── Single-inject guard (DOM sentinel; page⇆content 可见) ──
 const LEXI_SENTINEL = 'data-lexi-injected';
 const root = document.documentElement;
@@ -50,6 +68,35 @@ if (root.hasAttribute(LEXI_SENTINEL)) {
     best = best.slice(0, 260); // 控最大长度
     const html = best.replace(new RegExp(`\\b(${W})\\b`, 'gi'), '<mark class="lexi-mark-in-sent">$1</mark>');
     return { text: best, html };
+  }
+
+  // 译文缓存：同一个词/语言只翻译一次
+  const __lexiTransCache = new Map(); // key: "word|lang" -> translation
+  let __lexiHoverSeq = 0;             // 并发序号，防止旧请求覆盖新结果
+
+  function cleanMeaning(s) {
+    if (!s) return "";
+    return String(s).replace(/^Meaning\s*\(.*?\)\s*:\s*/i, "").trim();
+  }
+
+  // 把翻译追加/更新到 tooltip（绿色一行）
+  // 统一：只保留单参版本
+  function appendTranslationToTip(translation) {
+    if (tip.style.display === "none") return;
+    const meanDiv = tip.querySelector(".lexi-mean");
+    if (!meanDiv) return;
+
+    const ex = tip.querySelector(".lexi-mean-zh");
+    if (ex) {
+      ex.textContent = translation || "";
+    } else {
+      const zh = document.createElement("div");
+      zh.className = "lexi-mean-zh";
+      zh.style.marginTop = "6px";
+      zh.style.color = "#0a7";
+      zh.textContent = translation || "";
+      meanDiv.insertAdjacentElement("afterend", zh);
+    }
   }
 
   // 朗读整句（沿用你的 TTS，给句子一个更慢的速率）
@@ -143,24 +190,23 @@ if (root.hasAttribute(LEXI_SENTINEL)) {
   });
   
   // —— Built-in Translator 缓存 & 工具 ——
-  // 缓存每种目标语言的 translator，避免重复创建/重复下载
-  const __lexiTranslators = new Map();
-  async function getOrCreateTranslator(targetLanguage) {
-    // 特性检测：这是 Web API，存在于 window/self 上
+  // translator 缓存：每种目标语言一个
+  const __lexiTranslators = new Map(); // key: "en->zh-CN" -> Translator
+
+  async function getOrCreateTranslator(targetLanguage, { requireGesture = true } = {}) {
     if (!('Translator' in self)) return null;
-    
+
+    // 悬停不允许创建（没有用户手势时直接返回 null）
+    if (requireGesture && !navigator.userActivation?.isActive) return null;
+
+    const key = `en->${targetLanguage}`;
+    const cached = __lexiTranslators.get(key);
+    if (cached) return cached;
+
     try {
-      const key = `en->${targetLanguage}`;
-      if (__lexiTranslators.has(key)) return __lexiTranslators.get(key);
-      
-      // 需要在用户手势里调用，这里我们在 click 处理器中用它（满足要求）
-      const translator = await Translator.create({
-        sourceLanguage: 'en',
-        targetLanguage
-      });
-      
-      __lexiTranslators.set(key, translator);
-      return translator;
+      const tr = await Translator.create({ sourceLanguage: 'en', targetLanguage });
+      __lexiTranslators.set(key, tr);
+      return tr;
     } catch (e) {
       console.warn('[Lexi] Translator.create failed:', e);
       return null;
@@ -170,22 +216,6 @@ if (root.hasAttribute(LEXI_SENTINEL)) {
   function openGoogleTranslateFallback(word, targetLanguage) {
     const url = `https://translate.google.com/?sl=en&tl=${encodeURIComponent(targetLanguage)}&text=${encodeURIComponent(word)}&op=translate`;
     window.open(url, "_blank");
-  }
-  
-  function appendTranslationToTip(translation) {
-    const meanDiv = tip.querySelector(".lexi-mean");
-    if (!meanDiv) return;
-    const existing = tip.querySelector(".lexi-mean-zh");
-    if (existing) {
-      existing.textContent = translation;
-    } else {
-      const zh = document.createElement("div");
-      zh.className = "lexi-mean-zh";
-      zh.style.marginTop = "6px";
-      zh.style.color = "#0a7";
-      zh.textContent = translation;
-      meanDiv.insertAdjacentElement("afterend", zh);
-    }
   }
 
   // Scan and mark words
@@ -297,35 +327,8 @@ if (root.hasAttribute(LEXI_SENTINEL)) {
        return WORDLISTS.gre && WORDLISTS.gre.size ? WORDLISTS.gre.has(t) : false;
     }
 
-    if (highlightMode === "exclude-cet4") {
-      if (WORDLISTS.cet4 && WORDLISTS.cet4.has(t)) return false;
-      if (WORDLISTS.freq5k && WORDLISTS.freq5k.has(t)) return false;
-      return true;
-    }
-
     return true;   // 先不考虑任何词表，确认管道正常
   }
-
-  /* function shouldHighlight(w) {
-    const t = normalize(w);             // 全小写
-    if (t.length < 3) return false;     // 太短不高亮
-    if (COMMON.has(t)) return false;    // 基础停用词
-    if (WORDLISTS.stopExtra && WORDLISTS.stopExtra.has(t)) return false; // 你自定义的绝不高亮词
-
-    // 三种模式：basic / exclude-cet4 / gre-only
-    if (highlightMode === "gre-only") {
-      return WORDLISTS.gre ? WORDLISTS.gre.has(t) : true;
-    }
-    if (highlightMode === "exclude-cet4") {
-      // 常见词与 CET4 统统排除
-      if (WORDLISTS.cet4 && WORDLISTS.cet4.has(t)) return false;
-      if (WORDLISTS.freq5k && WORDLISTS.freq5k.has(t)) return false; // 进一步排除常见5k
-      return true;
-    }
-    // basic：只做基础停用 + 可选常见5k排除
-    if (WORDLISTS.freq5k && WORDLISTS.freq5k.has(t)) return false;
-    return true;
-  } */
 
   function isVisible(el) {
     if (!el) return false;
@@ -351,106 +354,184 @@ if (root.hasAttribute(LEXI_SENTINEL)) {
   }
 
   function onEnter(e) {
-    if (typeof chrome === 'undefined' || !chrome.runtime || !chrome.runtime.id) return;
+    // —— 安全保护：扩展上下文失效直接返回（避免报错）——
+    if (typeof chrome === "undefined" || !chrome.runtime || !chrome.runtime.id) return;
 
     const span = e.currentTarget;
-    const word = span.textContent;
+    const word = span.textContent?.trim() || "";
     const context = getContextSentence(span);
 
+    // 先画一个“骨架”
     tip.innerHTML = "Loading…";
     showTipNear(span);
 
-    chrome.runtime.sendMessage({ type: "LOOKUP_WORD", payload: { word, context } }, (res) => {
-      if (!res || !res.ok) {
-        tip.innerHTML = "No meaning available.";
-        return;
-      }
-      const { pos, short } = res.data || {};
-      tip.innerHTML = `
-        <div class="lexi-head">
-          <div class="lexi-word-row">
-            <span class="lexi-word">${word}</span>
-            <button class="lexi-btn lexi-audio" title="Pronounce">🔊</button>
-            <span class="lexi-pos">${pos || ""}</span>
-            <div class="lexi-spacer"></div>
-            <button class="lexi-btn" id="lexi-add" title="Add to vocab">＋ Add</button>
-            <button class="lexi-btn" id="lexi-close" title="Close">×</button>
-          </div>
-        </div>
-        <div class="lexi-mean">${short || ""}</div>
-        <div class="lexi-source">via Chrome built-in AI</div>
-      `;
+    // 查义（你原来的管道）
+    chrome.runtime.sendMessage(
+      { type: "LOOKUP_WORD", payload: { word, context } },
+      (res) => {
+        if (!res || !res.ok) {
+          tip.innerHTML = "No meaning available.";
+          return;
+        }
 
-      const ex = extractExample(span, word); // ← 新增：抓所在句子
-      tip.innerHTML = `
+        const { pos, short } = res.data || {};
+        const safeShort = cleanMeaning(short) || "";
+
+        // 可选：抓例句（你已有的实现）
+        const ex = extractExample(span, word); // => { html, text } | null
+
+        // ======== 单一版本的 tooltip 头部 + Add 下拉菜单 ========
+        tip.innerHTML = `
         <div class="lexi-head">
           <div class="lexi-word-row">
             <span class="lexi-word">${word}</span>
-            <button class="lexi-btn lexi-audio" title="Pronounce">🔊</button>
+            <button class="lexi-btn lexi-audio" title="Pronounce">🔈</button>
             <span class="lexi-pos">${pos || ""}</span>
             <div class="lexi-spacer"></div>
-            <button class="lexi-btn" id="lexi-add" title="Add to vocab">＋ Add</button>
-            <button class="lexi-btn" id="lexi-close" title="Close">×</button>
+
+            <!-- ▼ Add + 下拉菜单 -->
+            <div id="lexi-add-wrap" class="lexi-add-wrap">
+              <button class="lexi-btn" id="lexi-add" title="Add to deck">+ Add</button>
+              <div id="lexi-add-menu" class="lexi-menu hidden" role="menu" aria-hidden="true">
+                <div class="mi selected" data-deck="default" role="menuitem">My deck</div>
+                <div class="mi" data-deck="listening" role="menuitem">Listening deck</div>
+                <div class="mi" data-deck="new" role="menuitem">+ New deck…</div>
+              </div>
+            </div>
+            <!-- ▲ Add + 下拉菜单 -->
+
+            <button class="lexi-btn" id="lexi-close" title="Close">✕</button>
           </div>
         </div>
-        <div class="lexi-mean">${short || ""}</div>
-        
-        ${ex ? `
+
+        <div class="lexi-mean">${safeShort}</div>
+
+        ${ex
+            ? `
         <div class="lexi-ex">
           <div class="ex-label">Example</div>
           <div class="ex-text">${ex.html}</div>
           <div class="ex-ops">
-            <button class="lexi-btn ex-say" title="Read aloud">🔊</button>
+            <button class="lexi-btn ex-say" title="Read aloud">🔉</button>
             <button class="lexi-btn ex-copy" title="Copy sentence">📋</button>
-            <button class="lexi-btn ex-save" title="Save example">☆ Save</button>
           </div>
-        </div>` : ''}
+        </div>`
+            : ""
+          }
 
         <div class="lexi-source">via Chrome built-in AI</div>
       `;
 
-      // 发音（单词）
-      tip.querySelector('.lexi-audio')?.addEventListener('click', ev => {
-        ev.stopPropagation(); playPronunciation(word);
-      });
+        // ======== 事件：发音 ========
+        tip.querySelector(".lexi-audio")?.addEventListener("click", async (ev) => {
+          ev.stopPropagation();
+          playPronunciation(word);
+        });
 
-      // 保存单词（原有逻辑不变，增加 example 一并保存）
-      document.getElementById("lexi-add").onclick = async () => {
-        const payload = {
-          word,
-          lemma: span.dataset.lemma,
-          url: location.href,
-          meaning: short,
-          example: ex ? { text: ex.text, url: location.href } : undefined
+        // ======== 事件：+Add（展开/收起菜单） ========
+        const addBtn = document.getElementById("lexi-add");
+        const addMenu = document.getElementById("lexi-add-menu");
+        addBtn.onclick = (ev) => {
+          ev.stopPropagation();
+          const hidden = addMenu.classList.toggle("hidden");
+          addMenu.setAttribute("aria-hidden", hidden ? "true" : "false");
         };
-        chrome.runtime.sendMessage({ type: "ADD_VOCAB", payload }, () => {
-          tip.querySelector('.lexi-source').textContent = 'Added ✓';
-          setTimeout(hideTip, 800);
-        });
-      };
 
-      // 例句按钮
-      if (ex) {
-        tip.querySelector('.ex-say')?.addEventListener('click', e => { e.stopPropagation(); speakSentence(ex.text); });
-        tip.querySelector('.ex-copy')?.addEventListener('click', async e => {
-          e.stopPropagation();
-          const ok = await copyText(ex.text);
-          const btn = e.currentTarget; btn.textContent = ok ? '✓ Copied' : '⚠︎ Retry'; setTimeout(() => btn.textContent = '📋', 900);
-        });
-        tip.querySelector('.ex-save')?.addEventListener('click', e => {
-          e.stopPropagation();
-          chrome.runtime.sendMessage({
-            type: "ADD_EXAMPLE", payload: {
-              word, lemma: span.dataset.lemma, example: { text: ex.text, url: location.href }
-            }
-          }, () => {
-            const b = e.currentTarget; b.textContent = '★ Saved'; setTimeout(() => b.textContent = '☆ Save', 1000);
+        // 点击菜单项：记录 deck，立即发送 ADD_VOCAB
+        addMenu.addEventListener("click", async (ev) => {
+          const item = ev.target.closest(".mi");
+          if (!item) return;
+          ev.stopPropagation();
+
+          let deck = item.dataset.deck || "default";
+
+          // 高亮当前选中项
+          addMenu.querySelectorAll(".mi").forEach((el) => el.classList.remove("selected"));
+          item.classList.add("selected");
+
+          // “new” -> 询问新名字
+          if (deck === "new") {
+            const name = prompt("New deck name:");
+            if (!name) return; // 放弃
+            deck = name.trim();
+          }
+
+          // 收起菜单
+          addMenu.classList.add("hidden");
+          addMenu.setAttribute("aria-hidden", "true");
+
+          // 组装 payload 同你现在的一样……
+          const payload = {
+            word,
+            lemma: span.dataset.lemma,
+            url: location.href,
+            meaning: cleanMeaning(short),
+            example: ex ? { text: ex.text, url: location.href } : undefined,
+            deck, // ← 这是你刚选中的 deck
+          };
+
+          chrome.runtime.sendMessage({ type: "ADD_VOCAB", payload }, async (res) => {
+            tip.querySelector(".lexi-source").textContent = "Added ✓";
+            setTimeout(hideTip, 800);
+
+            // ➜ 添加成功后，打开 Side Panel
+            try {
+              await chrome.runtime.sendMessage({ type: "OPEN_SIDEPANEL" });
+            } catch { }
           });
-        });
-      }
 
-      document.getElementById("lexi-close").onclick = hideTip;
-      showTipNear(span);
+        // ======== 事件：Example 按钮 ========
+        if (ex) {
+          tip.querySelector(".ex-say")?.addEventListener("click", (ev) => {
+            ev.stopPropagation();
+            speakSentence?.(ex.text); // 若你已实现 speakSentence
+          });
+
+          tip.querySelector(".ex-copy")?.addEventListener("click", async (ev) => {
+            ev.stopPropagation();
+            try {
+              await navigator.clipboard.writeText(ex.text);
+              const btn = ev.currentTarget;
+              const old = btn.textContent;
+              btn.textContent = "✓ Copied";
+              setTimeout(() => (btn.textContent = old), 1000);
+            } catch { }
+          });
+        }
+
+        // 关闭
+        document.getElementById("lexi-close").onclick = hideTip;
+
+        // ======== Hover 自动翻译（已预热才使用；不会在这里强制创建） ========
+        tip.dataset.word = word;                   // 给本次 tooltip 记住是什么词
+        const mySeq = ++__lexiHoverSeq;           // 递增序号，避免竞态
+        chrome.storage.local.get({ targetLang: "zh-CN" }, async ({ targetLang }) => {
+          // 命中缓存 → 直接渲染
+          const cacheKey = `${word.toLowerCase()}|${targetLang}`;
+          const cached = __lexiTransCache.get(cacheKey);
+          if (cached && mySeq === __lexiHoverSeq) {
+            appendTranslationToTip(cached);
+            return;
+          }
+
+          try {
+            // 只在已预热的情况下复用（不创建）：requireGesture:false
+            const tr = await getOrCreateTranslator(targetLang, { requireGesture: false });
+            if (!tr) return; // 还没预热：静默；用户点击后再创建
+
+            const r = await tr.translate(word);
+            const t = r?.translation || "";
+            if (t && mySeq === __lexiHoverSeq) {
+              __lexiTransCache.set(cacheKey, t);
+              appendTranslationToTip(t);
+            }
+          } catch (err) {
+            // 静默：hover 场景失败不弹 GTranslate，只是不展示翻译
+          }
+        });
+
+        showTipNear(span);
+      });
     });
   }
 
@@ -490,7 +571,7 @@ if (root.hasAttribute(LEXI_SENTINEL)) {
 
       try {
         console.log('[Lexi] creating/using translator for', tgt);
-        const translator = await getOrCreateTranslator(tgt);
+        const translator = await getOrCreateTranslator(tgt, { requireGesture: true });
         if (!translator) {
           clearTimeout(timer);
           if (!timedOut) {
@@ -528,7 +609,7 @@ if (root.hasAttribute(LEXI_SENTINEL)) {
     const r = el.getBoundingClientRect();
     tip.style.display = "block";
     tip.style.position = "fixed";
-    tip.style.left = Math.min(r.left + window.scrollX, window.innerWidth - 240) + "px";
+    tip.style.left = Math.min(r.left, window.innerWidth - 240) + "px";
     tip.style.top = (r.bottom + 8) + "px";
   }
 
@@ -536,46 +617,6 @@ if (root.hasAttribute(LEXI_SENTINEL)) {
     tip.style.display = "none";
   }
   
-  /* // 点击高亮词 → 请求后台翻译
-  function handleWordClick(word) {
-    chrome.storage.local.get({ targetLang: "zh-CN" }, (res) => {
-      const tgt = res.targetLang || "zh-CN";
-      
-      chrome.runtime.sendMessage(
-        { type: "TRANSLATE_WORD", payload: { word, targetLang: tgt } },
-        (r) => {
-          const ok = r && r.ok;
-          const t = ok ? (r.data?.translation || "") : "";
-          if (t) {
-            showTranslationInTip(word, t);
-          } else {
-            // 没接上内置翻译时的降级：打开 Google Translate
-            const url = `https://translate.google.com/?sl=en&tl=${encodeURIComponent(tgt)}&text=${encodeURIComponent(word)}&op=translate`;
-            window.open(url, "_blank");
-          }      
-        }
-      );
-    });
-  } */
-  
-  /*  // 把翻译追加到现有 tooltip（绿色小行）
-  function showTranslationInTip(word, translation) {
-    if (tip.style.display === "none") return; // 没有打开 tooltip 就算了
-    const meanDiv = tip.querySelector(".lexi-mean");
-    if (!meanDiv) return;
-    
-    const existing = tip.querySelector(".lexi-mean-zh");
-    if (existing) {
-      existing.textContent = translation;
-    } else {
-      const zh = document.createElement("div");
-      zh.className = "lexi-mean-zh";
-      zh.style.marginTop = "6px";
-      zh.style.color = "#0a7";
-      zh.textContent = translation;
-      meanDiv.insertAdjacentElement("afterend", zh);
-    }
-  } */
   
   // 点击页面空白处关闭 tooltip
   // 点击页面：若点到高亮词 → 翻译；否则点空白处关闭 tooltip
@@ -597,3 +638,15 @@ if (root.hasAttribute(LEXI_SENTINEL)) {
   }, 5000);
 };
 
+// —— 首次任意点击即预热 translator（只执行一次）——
+(function setupPrewarmOnce() {
+  async function prewarmOnce() {
+    document.removeEventListener('click', prewarmOnce, true);
+    try {
+      const { targetLang } = await chrome.storage.local.get({ targetLang: 'zh-CN' });
+      await getOrCreateTranslator(targetLang, { requireGesture: true }); // 允许创建
+      console.debug('[Lexi] Translator prewarmed');
+    } catch { }
+  }
+  document.addEventListener('click', prewarmOnce, true);
+})();

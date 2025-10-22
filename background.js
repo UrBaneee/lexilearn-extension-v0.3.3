@@ -1,3 +1,61 @@
+// 实际保存：支持 deck / example / meanings 等
+async function addToVocab(payload) {
+  const {
+    word,
+    lemma,
+    url,
+    meaning,              // string（简释）
+    example,              // { text, url } | undefined
+    deck = 'default',     // 新增：词本/分组，默认 default
+  } = payload || {};
+
+  const { vocab = [] } = await chrome.storage.local.get({ vocab: [] });
+
+  const key = (lemma || word || '').toLowerCase();
+  let idx = vocab.findIndex(x => (x.lemma || x.word || '').toLowerCase() === key);
+
+  if (idx >= 0) {
+    // 合并已有词条
+    const cur = vocab[idx];
+    if (meaning) {
+      // 兼容旧结构：转成数组结构
+      if (!Array.isArray(cur.meanings)) cur.meanings = [];
+      // 简单策略：如果没有“短义”就追加一条
+      if (!cur.meanings.some(m => m.short === meaning)) {
+        cur.meanings.push({ short: meaning });
+      }
+    }
+    if (url) cur.url = url;
+    if (deck && !cur.deck) cur.deck = deck;
+
+    if (example?.text) {
+      cur.examples = cur.examples || [];
+      if (!cur.examples.some(e => e.text === example.text)) {
+        cur.examples.push(example);
+      }
+    }
+    vocab[idx] = cur;
+  } else {
+    // 新词条
+    const item = {
+      id: crypto.randomUUID?.() || Date.now().toString(36),
+      surface: word,
+      lemma,
+      url,
+      meanings: meaning ? [{ short: meaning }] : [],
+      examples: example ? [example] : [],
+      deck,
+      createdAt: Date.now(),
+    };
+    vocab.push(item);
+  }
+
+  await chrome.storage.local.set({ vocab });
+  // 🔔 新增：通知前端/侧栏刷新
+  try { chrome.runtime.sendMessage({ type: "VOCAB_UPDATED" }); } catch { }
+}
+
+
 // TODO: 用 Chrome Built-in Translator API 替换本函数
 async function translateOnDevice(text, targetLang = "zh-CN") {
   // 伪代码示例（拿到官方 API 后把下面注释替换为真实调用）：
@@ -35,11 +93,10 @@ async function setPrefs(partial) {
 // ---- Built-in AI placeholder ----
 // TODO: Replace with Chrome Built-in AI Translator/Prompt APIs.
 async function lookupWithBuiltInAI(word, contextSentence) {
-  // 1) Try your on-device Translator API here.
-  // 2) Optionally format/shorten via Prompt API.
-  // For now use fallback mini dict:
   const key = word.toLowerCase();
-  const meaning = MINI_DICT[key] || "Meaning (offline demo): tap + to save";
+  // 想要的英文提示（随便选一个/改成你喜欢的）
+  const fallback = "Click the highlight word to translate";
+  const meaning = MINI_DICT[key] || fallback;
   return { pos: "?", short: meaning };
 }
 
@@ -59,23 +116,6 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   }
 });
 
-// Add word to vocab
-async function addToVocab({ word, lemma, url, meaning }) {
-  const { vocab } = await getPrefs();
-  const id = lemma + "|en";
-  if (!vocab.find(v => v.id === id)) {
-    vocab.push({
-      id, surface: word, lemma, language: "en",
-      meanings: meaning ? [{ short: meaning }] : [],
-      sourceUrls: url ? [url] : [],
-      createdAt: Date.now()
-    });
-    await setPrefs({ vocab });
-    // notify side panel / content
-    chrome.runtime.sendMessage({ type: "VOCAB_UPDATED" });
-  }
-}
-
 // Messaging with content script
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   (async () => {
@@ -92,33 +132,29 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         const res = await lookupWithBuiltInAI(word, context);
         sendResponse({ ok: true, data: res });
       }
+      
       if (msg.type === "ADD_VOCAB") {
-        const v = msg.payload || {};
-        const { vocab = [] } = await chrome.storage.local.get({ vocab: [] });
-
-        // 查重（按 lemma 或 word）
-        const key = (v.lemma || v.word || '').toLowerCase();
-        const idx = vocab.findIndex(x => (x.lemma || x.word || '').toLowerCase() === key);
-
-        if (idx >= 0) {
-          // 合并字段（不覆盖已有非空；追加例句）
-          const cur = vocab[idx];
-          cur.meaning = cur.meaning || v.meaning;
-          cur.url = cur.url || v.url;
-          if (v.example?.text) {
-            cur.examples = cur.examples || [];
-            if (!cur.examples.some(e => e.text === v.example.text)) cur.examples.push(v.example);
-          }
-        } else {
-          const item = {
-            id: crypto.randomUUID?.() || Date.now().toString(36),
-            word: v.word, lemma: v.lemma, meaning: v.meaning, url: v.url,
-            examples: v.example?.text ? [v.example] : []
-          };
-          vocab.push(item);
-        }
-        await chrome.storage.local.set({ vocab });
+        await addToVocab(msg.payload);   // 这里会处理 deck、example 等逻辑
         sendResponse({ ok: true });
+        return; // 别忘了 return，否则会继续往下走
+      }
+
+      if (msg.type === "OPEN_SIDEPANEL") {
+        try {
+          const tabId = sender?.tab?.id;
+          // 确保为当前 tab 启用 side panel，并指定路径
+          await chrome.sidePanel.setOptions({
+            tabId,
+            path: "sidepanel.html",
+            enabled: true,
+          });
+          // 打开
+          await chrome.sidePanel.open({ tabId });
+          sendResponse({ ok: true });
+        } catch (e) {
+          sendResponse({ ok: false, error: String(e) });
+        }
+        return;
       }
 
       if (msg.type === "ADD_EXAMPLE") {

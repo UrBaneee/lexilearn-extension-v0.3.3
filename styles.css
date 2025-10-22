@@ -78,6 +78,48 @@
   padding: 2px 6px;
 }
 
+/* 让头部容器当定位锚点 */
+#lexi-tooltip .lexi-head {
+  position: relative;
+}
+
+/* Add 按钮的包裹，用于定位菜单 */
+#lexi-tooltip .lexi-add-wrap {
+  position: relative;
+}
+
+/* 下拉菜单 */
+#lexi-add-menu {
+  position: absolute;
+  right: 0;
+  top: 36px;
+  min-width: 180px;
+  background: #fff;
+  border: 1px solid rgba(0, 0, 0, .08);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .12);
+  padding: 6px;
+  z-index: 2147483647;
+}
+
+#lexi-add-menu.hidden {
+  display: none;
+}
+
+#lexi-add-menu .mi {
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+#lexi-add-menu .mi:hover {
+  background: #f5f7ff;
+}
+
 /* Dark mode */
 @media (prefers-color-scheme: dark) {
   #lexi-tooltip {
@@ -142,4 +184,16 @@
   display: flex;
   gap: 6px;
   margin-top: 6px;
+}
+
+/* ===== 自动翻译部分样式 ===== */
+#lexi-tooltip .lexi-mean-zh {
+  color: #0a7;
+  margin-top: 6px;
+}
+
+#lexi-tooltip mark.lexi-em {
+  background: #fff2ac;
+  padding: 0 2px;
+  border-radius: 2px;
 }

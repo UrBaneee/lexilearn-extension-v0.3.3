@@ -78,162 +78,294 @@
   }
 
   // --- render ---
-  function render(vocab) {
-    // 头部（导出/清空）
-    const header = `
-    <div class="sp-head">
-      <h2>My Vocabulary</h2>
-      <div class="sp-actions">
-        <button id="sp-export">Export</button>
-        <button id="sp-clear">Clear All</button>
-      </div>
-    </div>
-  `;
+  // 清洗旧版占位前缀 "Meaning (offline demo): ..."
+  function cleanMeaning(s) {
+    if (!s) return "";
+    return String(s).replace(/^Meaning\s*\(.*?\)\s*:\s*/i, "").trim();
+  }
 
-    if (!vocab.length) {
-      list.innerHTML =
-        header +
-        `<p style="color:#6b7280">No words yet. Hover a word on a page and click <b>＋ Add</b>.</p>`;
+  // 用这段完整替换你当前的 function render(vocab) { … }
+  function render(vocab) {
+    ensureStyles();
+    const el = document.getElementById('list');
+
+    // 头部（沿用你之前的导出/清空按钮）
+    const header = `
+      <div class="sp-head">
+        <div class="sp-title">
+          <h2>My Vocabulary</h2>
+        </div>
+        <div class="sp-actions">
+          <button id="sp-export">Export</button>
+          <button id="sp-clear">Clear All</button>
+        </div>
+      </div>
+    `;
+
+    if (!vocab || !vocab.length) {
+      el.innerHTML = header + '<p style="color:#6b7280">No words yet. Hover a word and click <b>＋ Add</b>.</p>';
       bindHeader([], vocab);
       return;
     }
 
-    // 统一/兼容化
-    const items = vocab.slice().map(norm);
+    // —— 分组：default → My deck；listening → Listening deck；其它用原始名 ——
+    const groups = {};
+    for (let i = 0; i < vocab.length; i++) {
+      const v = vocab[i];
+      const raw = v.deck || 'default';
+      const name = raw === 'default' ? 'My deck'
+        : raw === 'listening' ? 'Listening deck'
+          : raw;
+      (groups[name] ||= []).push({ v, i }); // 记录原始下标 i，方便删除/播放等
+    }
 
-    // 每一行（含例句）
-    const rows = items
-      .map((v, i) => {
-        const exList = (v.raw?.examples || []).slice(0, 2); // 最多显示 2 条
-        const exHtml = exList
-          .map(
-            (e, j) => `
+    // HTML 转义工具（保留你原有的风格）
+    const escapeHTML = s => String(s ?? "")
+      .replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+    // 组装每一行（复用你之前的结构/按钮类名，保证下面的事件绑定还能工作）
+    const sectionHTML = Object.entries(groups).map(([name, items]) => {
+      const rows = items.map(({ v, i }) => {
+        const wordHtml = `<div class="word">${escapeHTML(v.surface || v.lemma || "")}</div>`;
+        // 释义：去掉“Meaning (offline demo): …”前缀
+        const m = cleanMeaning(v.meaning);
+        const metaHtml = m ? `<div class="meta">${escapeHTML(m)}</div>` : "";
+
+        // 例句：最多显示 2 条，保留朗读与复制按钮（去掉链接）
+        const exList = (v.examples || v.raw?.examples || []).slice(0, 2);
+        const exHtml = exList.map((e, j) => `
         <div class="ex-row" data-j="${j}">
-          <span class="ex-text">${escapeHTML(e.text)}</span>
+          <span class="ex-text">${escapeHTML(e.text || "")}</span>
           <span class="ex-ops">
-            <button class="btn ex-say"  title="Read aloud">🔊</button>
+            <button class="btn ex-say"  title="Read aloud">🔈</button>
             <button class="btn ex-copy" title="Copy">📋</button>
           </span>
-        </div>`
-          )
-          .join("");
+        </div>
+      `).join("");
+        const exBlock = exHtml ? `<div class="ex-list">${exHtml}</div>` : "";
+
+        // 操作区：发音 / 打开来源(有链接时) / 删除
+        const ops = `
+        <div class="ops">
+          <button class="btn play" title="Pronounce">🔈</button>
+          ${v.url ? `<button class="btn open" title="Open source">🔗</button>` : ""}
+          <button class="btn del"  title="Remove">🗑</button>
+        </div>
+      `;
 
         return `
         <div class="row" data-i="${i}">
           <div class="w">
-            <div class="word">${escapeHTML(v.surface)}
-              <span class="lemma">${escapeHTML(v.lemma || "")}</span>
-            </div>
-            <div class="meta">${escapeHTML(v.meaning || "")}</div>
-            ${v.url ? `<div class="src">${escapeHTML(v.url)}</div>` : ""}
-            ${exHtml ? `<div class="ex-list">${exHtml}</div>` : ""}
+            ${wordHtml}
+            ${metaHtml}
+            ${exBlock}
           </div>
-          <div class="ops">
-            <button class="btn play" title="Pronounce">🔊</button>
-            ${v.url ? `<button class="btn open" title="Open source">↗️</button>` : ""}
-            <button class="btn del" title="Remove">🗑️</button>
-          </div>
-        </div>`;
-      })
-      .join("");
+          ${ops}
+        </div>
+      `;
+      }).join("");
 
-    list.innerHTML = header + rows;
+      // 每个分组一个小标题
+      return `
+      <h3 class="sp-group">${escapeHTML(name)}</h3>
+      ${rows}
+    `;
+    }).join("");
 
-    // 绑定头部按钮
-    bindHeader(items, vocab);
+    el.innerHTML = header + sectionHTML;
 
-    // 原有按钮：发音 / 打开 / 删除
-    list.querySelectorAll(".row .play").forEach((b) => {
+    // 绑定头部（导出/清空）
+    bindHeader(vocab, vocab);
+
+    // —— 行内事件绑定：沿用你原来逻辑 —— //
+    // 发音
+    el.querySelectorAll(".row .play").forEach(b => {
       b.onclick = (e) => {
         const i = +e.currentTarget.closest(".row").dataset.i;
-        const item = items[i];
+        const item = vocab[i];
         play(item.surface || item.lemma);
       };
     });
 
-    list.querySelectorAll(".row .open").forEach((b) => {
+    // 打开来源（仅保留按钮；列表不再展示长链接）
+    el.querySelectorAll(".row .open").forEach(b => {
       b.onclick = (e) => {
         const i = +e.currentTarget.closest(".row").dataset.i;
-        const item = items[i];
+        const item = vocab[i];
         if (item.url) chrome.tabs.create({ url: item.url });
       };
     });
 
-    list.querySelectorAll(".row .del").forEach((b) => {
+    // 删除
+    el.querySelectorAll(".row .del").forEach(b => {
       b.onclick = async (e) => {
         const i = +e.currentTarget.closest(".row").dataset.i;
         await removeByIndex(i);
       };
     });
 
-    // ✅ 新增：例句 朗读/复制
-    list.querySelectorAll(".row .ex-say").forEach((b) => {
+    // 例句：朗读
+    el.querySelectorAll(".row .ex-say").forEach(b => {
       b.onclick = (e) => {
         const row = e.currentTarget.closest(".row");
         const i = +row.dataset.i;
         const j = +e.currentTarget.closest(".ex-row").dataset.j;
-        const ex = (items[i].raw?.examples || [])[j];
+        const ex = (vocab[i].examples || vocab[i].raw?.examples || [])[j];
         if (ex?.text) play(ex.text);
       };
     });
 
-    list.querySelectorAll(".row .ex-copy").forEach((b) => {
+    // 例句：复制
+    el.querySelectorAll(".row .ex-copy").forEach(b => {
       b.onclick = async (e) => {
         const row = e.currentTarget.closest(".row");
         const i = +row.dataset.i;
         const j = +e.currentTarget.closest(".ex-row").dataset.j;
-        const ex = (items[i].raw?.examples || [])[j];
-        if (ex?.text) {
-          try {
-            await navigator.clipboard.writeText(ex.text);
-            b.textContent = "✓";
-            setTimeout(() => (b.textContent = "📋"), 900);
-          } catch { }
-        }
+        const ex = (vocab[i].examples || vocab[i].raw?.examples || [])[j];
+        if (!ex?.text) return;
+        try {
+          await navigator.clipboard.writeText(ex.text);
+          const btn = e.currentTarget;
+          const old = btn.textContent;
+          btn.textContent = "✓";
+          setTimeout(() => (btn.textContent = old), 900);
+        } catch { }
       };
     });
   }
-
+  
   function bindHeader(items, rawVocab) {
-    document.getElementById("sp-export")?.addEventListener("click", async () => {
-      const { vocab = [] } = await chrome.storage.local.get({ vocab: [] });
-      exportJSON(vocab);
-    });
-    document.getElementById("sp-clear")?.addEventListener("click", async () => {
-      if (confirm("Clear all saved words?")) await clearAll();
-    });
+    // —— 导出 CSV（每个 deck 一个文件）
+    const exportBtn = document.getElementById("sp-export");
+    if (exportBtn) {
+      exportBtn.onclick = async () => {
+        // 1) 取数据（优先用 render 传进来的 rawVocab，没有就从 storage 读）
+        const vocab = rawVocab ?? (await chrome.storage.local.get({ vocab: [] })).vocab;
 
-    // inject minimal styles (if you don't already style in sidepanel.html)
+        if (!vocab || !vocab.length) {
+          alert("No words to export yet.");
+          return;
+        }
+
+        // 2) deck 分组
+        const groups = {};
+        for (const v of vocab) {
+          const key = v.deck || "default";
+          (groups[key] ||= []).push(v);
+        }
+
+        // 3) 生成 CSV 文本
+        const toCSV = (rows) => {
+          const header = ["Word", "Meaning", "Example", "Deck", "Source URL"];
+          const esc = (s) => `"${String(s ?? "").replace(/"/g, '""')}"`;
+          const lines = [header.join(",")];
+          rows.forEach(v => {
+            lines.push([
+              esc(v.word),
+              esc(v.meaning || v.meanings?.[0]?.short || ""),
+              esc(v.examples?.[0]?.text || ""),
+              esc(v.deck || "default"),
+              esc(v.url || "")
+            ].join(","));
+          });
+          return lines.join("\n");
+        };
+
+        const safe = (s) => String(s).replace(/[\\/:*?"<>|]+/g, "_");
+
+        // 4) 保存（优先用 chrome.downloads；没有权限就用 a[download] 兜底）
+        const saveFile = async (filename, text) => {
+          const blob = new Blob([text], { type: "text/csv" });
+          const url = URL.createObjectURL(blob);
+
+          if (chrome.downloads?.download) {
+            await chrome.downloads.download({ url, filename });
+          } else {
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+          }
+          // 给浏览器一点时间处理对象 URL
+          await new Promise(r => setTimeout(r, 120));
+        };
+
+        for (const [deck, rows] of Object.entries(groups)) {
+          const csv = toCSV(rows);
+          const name = deck === "default" ? "My deck" : deck;
+          await saveFile(`${safe(name)}.csv`, csv);
+        }
+      };
+    }
+
+    document.getElementById("sp-clear").onclick = async () => {
+      const ok = confirm("Clear all saved words?");
+      if (!ok) return;
+      await chrome.storage.local.set({ vocab: [] });
+      // 你如果有 VOCAB_UPDATED 的自动刷新监听，这里也可以：
+      // chrome.runtime.sendMessage({ type: 'VOCAB_UPDATED' });
+      // 然后本页调用 load()/render() 刷新
+      location.reload();
+    };
+
+    // —— 样式注入（你原来就有）
     ensureStyles();
   }
 
   function ensureStyles() {
-    if (document.getElementById("sp-style")) return;
-    const style = document.createElement("style");
-    style.id = "sp-style";
-    style.textContent = `
-      .sp-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
-      .sp-head h2{margin:0;font:600 16px/1.2 system-ui,Inter,ui-sans-serif}
-      .sp-actions{display:flex;gap:8px}
-      .sp-actions button{border:1px solid #e5e7eb;background:#fff;padding:6px 10px;border-radius:8px;cursor:pointer}
-      .row{display:flex;align-items:center;gap:8px;justify-content:space-between;border-bottom:1px solid #e5e7eb;padding:8px 0}
-      .w{min-width:0}
-      .word{font-weight:700}
-      .lemma{color:#6b7280;font-weight:400;margin-left:6px;font-size:12px}
-      .meta{color:#6b7280;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:52vw}
-      .src{color:#9ca3af;font-size:12px;word-break:break-all}
-      .ops{display:flex;gap:6px}
-      .btn{border:1px solid #e5e7eb;background:#f9fafb;padding:4px 8px;border-radius:8px;cursor:pointer}
-      .btn:hover{background:#eef2ff;border-color:#c7d2fe}
-    `; 
-    style.textContent += `
-      .ex-list{margin-top:6px;display:flex;flex-direction:column;gap:6px}
-      .ex-row{display:flex;align-items:center;justify-content:space-between;gap:8px}
-      .ex-text{font-size:12px;color:#374151;flex:1}
-      .ex-ops .btn{padding:2px 6px}
-    `;
+    let style = document.getElementById("sp-style");
+    if (!style) {
+      style = document.createElement("style");
+      style.id = "sp-style";
+      document.head.appendChild(style);
+    }
 
-    document.head.appendChild(style);
+    style.textContent = `
+    /* 顶部区域（标题 + 按钮） */
+    .sp-head {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 6px 0 10px; border-bottom: 1px solid #eee; margin-bottom: 12px;
+    }
+    .sp-title h2 { margin: 0; font-size: 18px; font-weight: 700; color: #111; }
+    .sp-actions { display: flex; gap: 10px; }
+    .sp-actions button {
+      font-size: 13px; border: 1px solid #e5e5e5; background: #fff;
+      border-radius: 10px; padding: 6px 12px; cursor: pointer;
+    }
+    .sp-actions button:hover { background: #f6f6f6; }
+
+    /* 分组标题(deck)—— 这就是你原来写在 HTML 里的 .sp-group */
+    .sp-group {
+      margin: 14px 0 8px;
+      font: 600 14px/1.2 system-ui, Inter, ui-sans-serif;
+      color: #374151;
+    }
+
+    /* 每个单词行 */
+    .row {
+      display: flex; align-items: flex-start; justify-content: space-between;
+      border-bottom: 1px solid #f2f2f2; padding: 10px 0;
+    }
+    .word { font-size: 15px; font-weight: 700; color: #111; margin-bottom: 4px; }
+    .meta { font-size: 13px; color: #444; margin-top: 2px; }
+    .ex-list { font-size: 13px; color: #555; margin-top: 6px; }
+    .ops { display: flex; align-items: center; gap: 8px; }
+    .btn, .lexi-btn {
+      border: 1px solid #e5e5e5; background: #fff; border-radius: 10px;
+      padding: 4px 10px; font-size: 12px; cursor: pointer;
+    }
+    .btn:hover, .lexi-btn:hover { background: #f6f6f6; }
+
+    /* 让排版更清爽一点 */
+    #list .row .word { font-size: 16px; font-weight: 700; margin-bottom: 2px; }
+    #list .row .meta { font-size: 13px; color: #4b5563; margin-bottom: 6px; }
+    #list .ex-list { margin-top: 4px; display: flex; flex-direction: column; gap: 4px; }
+    #list .ex-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    #list .ex-text { font-size: 12px; color: #374151; flex: 1; }
+    #list .ex-ops .btn { padding: 2px 6px; }
+  `;
   }
 
   function escapeHTML(s) {
@@ -253,4 +385,9 @@
 
   // init
   await load();
+
+  chrome.runtime.onMessage.addListener((msg) => {
+    if (msg.type === "VOCAB_UPDATED") load();
+  });
+
 })();
