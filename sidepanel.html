@@ -8,7 +8,9 @@
 
 <body>
   <div id="list"></div>
-  <script src="sidepanel.js"></script>
+  <!-- 一定要先加载 XLSX，再加载你的 sidepanel.js -->
+  <script src="./vendor/xlsx/xlsx.full.min.js"></script>
+  <script src="./sidepanel.js"></script>
 </body>
 
 </html>

@@ -354,6 +354,15 @@ if (root.hasAttribute(LEXI_SENTINEL)) {
   }
 
   function onEnter(e) {
+    // 动态生成 deck 菜单
+    async function updateDeckMenu(menuEl) {
+      const { vocab = [] } = await chrome.storage.local.get({ vocab: [] });
+      const decks = [...new Set(vocab.map(v => v.deck || "default"))];
+
+      menuEl.innerHTML = decks
+        .map(d => `<div class="mi" data-deck="${d}" role="menuitem">📘 ${d}</div>`)
+        .join('') + `<div class="mi" data-deck="new" role="menuitem">➕ New deck...</div>`;
+    }
     // —— 安全保护：扩展上下文失效直接返回（避免报错）——
     if (typeof chrome === "undefined" || !chrome.runtime || !chrome.runtime.id) return;
 
@@ -431,8 +440,11 @@ if (root.hasAttribute(LEXI_SENTINEL)) {
         // ======== 事件：+Add（展开/收起菜单） ========
         const addBtn = document.getElementById("lexi-add");
         const addMenu = document.getElementById("lexi-add-menu");
-        addBtn.onclick = (ev) => {
+        // 点击 +Add 按钮时：动态更新最新 deck 列表并展开菜单
+        addBtn.onclick = async (ev) => {
           ev.stopPropagation();
+          // ✅ 在展开前调用 updateDeckMenu() 更新菜单内容
+          await updateDeckMenu(addMenu);
           const hidden = addMenu.classList.toggle("hidden");
           addMenu.setAttribute("aria-hidden", hidden ? "true" : "false");
         };

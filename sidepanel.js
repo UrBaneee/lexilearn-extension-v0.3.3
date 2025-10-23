@@ -235,70 +235,36 @@
   }
   
   function bindHeader(items, rawVocab) {
-    // —— 导出 CSV（每个 deck 一个文件）
-    const exportBtn = document.getElementById("sp-export");
-    if (exportBtn) {
-      exportBtn.onclick = async () => {
-        // 1) 取数据（优先用 render 传进来的 rawVocab，没有就从 storage 读）
-        const vocab = rawVocab ?? (await chrome.storage.local.get({ vocab: [] })).vocab;
+    document.getElementById("sp-export").addEventListener("click", async () => {
+      const { vocab = [] } = await chrome.storage.local.get({ vocab: [] });
+      const groups = {};
+      for (const v of vocab) {
+        const key = v.deck || "default";
+        (groups[key] ||= []).push(v);
+      }
 
-        if (!vocab || !vocab.length) {
-          alert("No words to export yet.");
-          return;
-        }
+      const wb = XLSX.utils.book_new();
 
-        // 2) deck 分组
-        const groups = {};
-        for (const v of vocab) {
-          const key = v.deck || "default";
-          (groups[key] ||= []).push(v);
-        }
+      const toSheetName = (name) =>
+        String(name || "default").replace(/[\\\/\?\*\:\[\]]/g, "_").slice(0, 31);
 
-        // 3) 生成 CSV 文本
-        const toCSV = (rows) => {
-          const header = ["Word", "Meaning", "Example", "Deck", "Source URL"];
-          const esc = (s) => `"${String(s ?? "").replace(/"/g, '""')}"`;
-          const lines = [header.join(",")];
-          rows.forEach(v => {
-            lines.push([
-              esc(v.word),
-              esc(v.meaning || v.meanings?.[0]?.short || ""),
-              esc(v.examples?.[0]?.text || ""),
-              esc(v.deck || "default"),
-              esc(v.url || "")
-            ].join(","));
-          });
-          return lines.join("\n");
-        };
+      for (const [deck, rows] of Object.entries(groups)) {
+        const data = rows.map(raw => {
+          const v = norm(raw); // 复用你前面定义的规范化函数
+          return {
+            Word: v.surface || v.word || v.lemma || v.term || "",
+            Meaning: v.meaning || v.meanings?.[0]?.short || v.short || "",
+            Example: v.examples?.[0]?.text || "",
+            Deck: v.deck || "default",
+            SourceURL: v.url || v.sourceUrl || ""
+          };
+        });
+        const ws = XLSX.utils.json_to_sheet(data);
+        XLSX.utils.book_append_sheet(wb, ws, toSheetName(deck));
+      }
+      XLSX.writeFile(wb, "My_Vocabulary.xlsx");
+    });
 
-        const safe = (s) => String(s).replace(/[\\/:*?"<>|]+/g, "_");
-
-        // 4) 保存（优先用 chrome.downloads；没有权限就用 a[download] 兜底）
-        const saveFile = async (filename, text) => {
-          const blob = new Blob([text], { type: "text/csv" });
-          const url = URL.createObjectURL(blob);
-
-          if (chrome.downloads?.download) {
-            await chrome.downloads.download({ url, filename });
-          } else {
-            const a = document.createElement("a");
-            a.href = url;
-            a.download = filename;
-            document.body.appendChild(a);
-            a.click();
-            a.remove();
-          }
-          // 给浏览器一点时间处理对象 URL
-          await new Promise(r => setTimeout(r, 120));
-        };
-
-        for (const [deck, rows] of Object.entries(groups)) {
-          const csv = toCSV(rows);
-          const name = deck === "default" ? "My deck" : deck;
-          await saveFile(`${safe(name)}.csv`, csv);
-        }
-      };
-    }
 
     document.getElementById("sp-clear").onclick = async () => {
       const ok = confirm("Clear all saved words?");

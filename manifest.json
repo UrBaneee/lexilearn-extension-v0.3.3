@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "LexiLearn - On-page Vocabulary Coach",
-  "version": "0.3.0",
+  "version": "0.3.2",
   "description": "Highlight unknown English words, show meanings, and save to your vocabulary — all on device.",
   "icons": {
     "16": "assets/icon16.png",
