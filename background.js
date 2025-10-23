@@ -108,6 +108,36 @@ chrome.runtime.onInstalled.addListener(() => {
     contexts: ["selection"]
   });
 });
+// A) 可选：点击扩展图标也能直接打开 Side Panel
+chrome.runtime.onInstalled.addListener(() => {
+  // 老版本 Chrome 没有 sidePanel API，这里做一下兜底
+  if (chrome.sidePanel?.setPanelBehavior) {
+    /* chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }); */
+  }
+});
+// B) 封装：在指定 tab 上启用并指定 sidepanel.html
+async function enableSidePanel(tabId) {
+  try {
+    await chrome.sidePanel.setOptions({
+      tabId,
+      path: 'sidepanel.html',
+      enabled: true,
+    });
+  } catch (e) {
+    // 某些页面（如 chrome://, WebStore）不支持 side panel，忽略即可
+    console.warn('[Lexi] enableSidePanel failed:', e);
+  }
+}
+// C) 监听 tab 状态，确保每个页面激活/加载完成后都启用 side panel
+chrome.tabs.onActivated.addListener(({ tabId }) => {
+  enableSidePanel(tabId);
+});
+
+chrome.tabs.onUpdated.addListener((tabId, info) => {
+  if (info.status === 'complete') {
+    enableSidePanel(tabId);
+  }
+});
 
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   if (info.menuItemId === "lexi_add" && info.selectionText) {
@@ -132,31 +162,46 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         const res = await lookupWithBuiltInAI(word, context);
         sendResponse({ ok: true, data: res });
       }
-      
       if (msg.type === "ADD_VOCAB") {
         await addToVocab(msg.payload);   // 这里会处理 deck、example 等逻辑
         sendResponse({ ok: true });
         return; // 别忘了 return，否则会继续往下走
       }
+      // 打开右侧面板（由 content.js 发送 OPEN_SIDEPANEL 消息时触发）
+      if (msg.type === 'OPEN_SIDEPANEL') {
+        console.log('[Lexi][bg] OPEN_SIDEPANEL received...', _sender);
 
-      if (msg.type === "OPEN_SIDEPANEL") {
-        try {
-          const tabId = sender?.tab?.id;
-          // 确保为当前 tab 启用 side panel，并指定路径
-          await chrome.sidePanel.setOptions({
-            tabId,
-            path: "sidepanel.html",
-            enabled: true,
-          });
-          // 打开
-          await chrome.sidePanel.open({ tabId });
-          sendResponse({ ok: true });
-        } catch (e) {
-          sendResponse({ ok: false, error: String(e) });
-        }
-        return;
+        (async () => {
+          try {
+            // 1) 拿到 tabId（优先 sender.tab.id，拿不到就查 active tab）
+            let tabId = _sender?.tab?.id;
+            if (!tabId) {
+              const [active] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+              tabId = active?.id;
+              console.log('[Lexi][bg] fallback query tabId =', tabId);
+            }
+            if (!tabId) throw new Error('No tabId');
+
+            // 2) 先在该 tab 上启用 side panel 并指定页面
+            await chrome.sidePanel.setOptions({
+              tabId,
+              path: 'sidepanel.html',
+              enabled: true,
+            });
+
+            // 3) 再按 tabId 打开
+            await chrome.sidePanel.open({ tabId });
+            console.log('[Lexi][bg] side panel opened on tab', tabId);
+            sendResponse({ ok: true });
+          } catch (e) {
+            console.warn('[Lexi][bg] open side panel failed:', e);
+            sendResponse({ ok: false, error: String(e) });
+          }
+        })();
+
+        // ★ 必须：告诉 Chrome 我会异步 sendResponse
+        return true;
       }
-
       if (msg.type === "ADD_EXAMPLE") {
         const p = msg.payload || {};
         const { vocab = [] } = await chrome.storage.local.get({ vocab: [] });
