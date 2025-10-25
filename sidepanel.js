@@ -78,18 +78,18 @@
   }
 
   // --- render ---
-  // 清洗旧版占位前缀 "Meaning (offline demo): ..."
+  // Clean old placeholder prefix "Meaning (offline demo): ..."
   function cleanMeaning(s) {
     if (!s) return "";
     return String(s).replace(/^Meaning\s*\(.*?\)\s*:\s*/i, "").trim();
   }
 
-  // 用这段完整替换你当前的 function render(vocab) { … }
+  // Replace your current function render(vocab) { … } with this implementation
   function render(vocab) {
     ensureStyles();
     const el = document.getElementById('list');
 
-    // 头部（沿用你之前的导出/清空按钮）
+  // Header (reuses your previous export/clear buttons)
     const header = `
       <div class="sp-head">
         <div class="sp-title">
@@ -108,7 +108,7 @@
       return;
     }
 
-    // —— 分组：default → My deck；listening → Listening deck；其它用原始名 ——
+  // —— Grouping: default → My deck; listening → Listening deck; others use original name ——
     const groups = {};
     for (let i = 0; i < vocab.length; i++) {
       const v = vocab[i];
@@ -116,22 +116,22 @@
       const name = raw === 'default' ? 'My deck'
         : raw === 'listening' ? 'Listening deck'
           : raw;
-      (groups[name] ||= []).push({ v, i }); // 记录原始下标 i，方便删除/播放等
+  (groups[name] ||= []).push({ v, i }); // record original index i for remove/play convenience
     }
 
-    // HTML 转义工具（保留你原有的风格）
+  // HTML escape utility (keeps your original style)
     const escapeHTML = s => String(s ?? "")
       .replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
-    // 组装每一行（复用你之前的结构/按钮类名，保证下面的事件绑定还能工作）
+  // Assemble each row (reuses your structure/button classes so event bindings still work)
     const sectionHTML = Object.entries(groups).map(([name, items]) => {
       const rows = items.map(({ v, i }) => {
         const wordHtml = `<div class="word">${escapeHTML(v.surface || v.lemma || "")}</div>`;
-        // 释义：去掉“Meaning (offline demo): …”前缀
+  // Meaning: strip the "Meaning (offline demo): ..." prefix
         const m = cleanMeaning(v.meaning);
         const metaHtml = m ? `<div class="meta">${escapeHTML(m)}</div>` : "";
 
-        // 例句：最多显示 2 条，保留朗读与复制按钮（去掉链接）
+  // Examples: show up to 2; keep read & copy buttons (remove links)
         const exList = (v.examples || v.raw?.examples || []).slice(0, 2);
         const exHtml = exList.map((e, j) => `
         <div class="ex-row" data-j="${j}">
@@ -144,7 +144,7 @@
       `).join("");
         const exBlock = exHtml ? `<div class="ex-list">${exHtml}</div>` : "";
 
-        // 操作区：发音 / 打开来源(有链接时) / 删除
+  // Ops area: pronounce / open source (if URL) / remove
         const ops = `
         <div class="ops">
           <button class="btn play" title="Pronounce">🔈</button>
@@ -165,7 +165,7 @@
       `;
       }).join("");
 
-      // 每个分组一个小标题
+  // A small title for each group
       return `
       <h3 class="sp-group">${escapeHTML(name)}</h3>
       ${rows}
@@ -174,11 +174,11 @@
 
     el.innerHTML = header + sectionHTML;
 
-    // 绑定头部（导出/清空）
+  // Bind header (export/clear)
     bindHeader(vocab, vocab);
 
-    // —— 行内事件绑定：沿用你原来逻辑 —— //
-    // 发音
+  // —— Inline event bindings: reuse original logic —— //
+  // Pronunciation (play)
     el.querySelectorAll(".row .play").forEach(b => {
       b.onclick = (e) => {
         const i = +e.currentTarget.closest(".row").dataset.i;
@@ -187,7 +187,7 @@
       };
     });
 
-    // 打开来源（仅保留按钮；列表不再展示长链接）
+  // Open source (keep button only; list no longer shows long URLs)
     el.querySelectorAll(".row .open").forEach(b => {
       b.onclick = (e) => {
         const i = +e.currentTarget.closest(".row").dataset.i;
@@ -196,7 +196,7 @@
       };
     });
 
-    // 删除
+  // Remove
     el.querySelectorAll(".row .del").forEach(b => {
       b.onclick = async (e) => {
         const i = +e.currentTarget.closest(".row").dataset.i;
@@ -204,7 +204,7 @@
       };
     });
 
-    // 例句：朗读
+  // Example: read aloud
     el.querySelectorAll(".row .ex-say").forEach(b => {
       b.onclick = (e) => {
         const row = e.currentTarget.closest(".row");
@@ -215,7 +215,7 @@
       };
     });
 
-    // 例句：复制
+  // Example: copy
     el.querySelectorAll(".row .ex-copy").forEach(b => {
       b.onclick = async (e) => {
         const row = e.currentTarget.closest(".row");
@@ -250,7 +250,7 @@
 
       for (const [deck, rows] of Object.entries(groups)) {
         const data = rows.map(raw => {
-          const v = norm(raw); // 复用你前面定义的规范化函数
+          const v = norm(raw); // reuse the normalization function defined above
           return {
             Word: v.surface || v.word || v.lemma || v.term || "",
             Meaning: v.meaning || v.meanings?.[0]?.short || v.short || "",
@@ -270,14 +270,14 @@
       const ok = confirm("Clear all saved words?");
       if (!ok) return;
       await chrome.storage.local.set({ vocab: [] });
-      // 你如果有 VOCAB_UPDATED 的自动刷新监听，这里也可以：
+      // If you have an automatic refresh listener for VOCAB_UPDATED, you can send a message here:
       // chrome.runtime.sendMessage({ type: 'VOCAB_UPDATED' });
-      // 然后本页调用 load()/render() 刷新
+      // Then the page will call load()/render() to refresh
       location.reload();
     };
 
-    // —— 样式注入（你原来就有）
-    ensureStyles();
+  // —— Style injection (you already had this) ——
+  ensureStyles();
   }
 
   function ensureStyles() {
@@ -289,7 +289,7 @@
     }
 
     style.textContent = `
-    /* 顶部区域（标题 + 按钮） */
+    /* Header area (title + actions) */
     .sp-head {
       display: flex; align-items: center; justify-content: space-between;
       padding: 6px 0 10px; border-bottom: 1px solid #eee; margin-bottom: 12px;
@@ -302,14 +302,14 @@
     }
     .sp-actions button:hover { background: #f6f6f6; }
 
-    /* 分组标题(deck)—— 这就是你原来写在 HTML 里的 .sp-group */
+    /* Group title (deck) — this is the .sp-group you previously put in HTML */
     .sp-group {
       margin: 14px 0 8px;
       font: 600 14px/1.2 system-ui, Inter, ui-sans-serif;
       color: #374151;
     }
 
-    /* 每个单词行 */
+    /* Each word row */
     .row {
       display: flex; align-items: flex-start; justify-content: space-between;
       border-bottom: 1px solid #f2f2f2; padding: 10px 0;
@@ -324,7 +324,7 @@
     }
     .btn:hover, .lexi-btn:hover { background: #f6f6f6; }
 
-    /* 让排版更清爽一点 */
+    /* Make layout a bit cleaner */
     #list .row .word { font-size: 16px; font-weight: 700; margin-bottom: 2px; }
     #list .row .meta { font-size: 13px; color: #4b5563; margin-bottom: 6px; }
     #list .ex-list { margin-top: 4px; display: flex; flex-direction: column; gap: 4px; }

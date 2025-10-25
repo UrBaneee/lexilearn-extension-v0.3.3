@@ -1,12 +1,12 @@
-// 实际保存：支持 deck / example / meanings 等
+// Actual saving: supports deck / example / meanings, etc.
 async function addToVocab(payload) {
   const {
     word,
     lemma,
     url,
-    meaning,              // string（简释）
+  meaning,              // string (short definition)
     example,              // { text, url } | undefined
-    deck = 'default',     // 新增：词本/分组，默认 default
+  deck = 'default',     // added: deck/group, default 'default'
   } = payload || {};
 
   const { vocab = [] } = await chrome.storage.local.get({ vocab: [] });
@@ -15,12 +15,12 @@ async function addToVocab(payload) {
   let idx = vocab.findIndex(x => (x.lemma || x.word || '').toLowerCase() === key);
 
   if (idx >= 0) {
-    // 合并已有词条
+    // Merge into existing entry
     const cur = vocab[idx];
     if (meaning) {
-      // 兼容旧结构：转成数组结构
+      // Backwards-compat: convert to array structure
       if (!Array.isArray(cur.meanings)) cur.meanings = [];
-      // 简单策略：如果没有“短义”就追加一条
+      // Simple strategy: if there's no short meaning, append one
       if (!cur.meanings.some(m => m.short === meaning)) {
         cur.meanings.push({ short: meaning });
       }
@@ -36,7 +36,7 @@ async function addToVocab(payload) {
     }
     vocab[idx] = cur;
   } else {
-    // 新词条
+    // New entry
     const item = {
       id: crypto.randomUUID?.() || Date.now().toString(36),
       surface: word,
@@ -51,18 +51,18 @@ async function addToVocab(payload) {
   }
 
   await chrome.storage.local.set({ vocab });
-  // 🔔 新增：通知前端/侧栏刷新
+  // 🔔 New: notify front-end / side panel to refresh
   try { chrome.runtime.sendMessage({ type: "VOCAB_UPDATED" }); } catch { }
 }
 
 
-// TODO: 用 Chrome Built-in Translator API 替换本函数
+// TODO: Replace this function with Chrome Built-in Translator API
 async function translateOnDevice(text, targetLang = "zh-CN") {
-  // 伪代码示例（拿到官方 API 后把下面注释替换为真实调用）：
+  // Pseudocode example (replace below with real call when official API is available):
   // const res = await chrome.ai.translate({ text, src: "en", tgt: targetLang });
   // return res.translation;
 
-  // ---- 临时降级方案：返回 null，让前端决定是否打开 Google Translate ----
+  // ---- Temporary fallback: return empty string allowing front-end to decide whether to open Google Translate ----
   return "";
 }
 
@@ -94,8 +94,8 @@ async function setPrefs(partial) {
 // TODO: Replace with Chrome Built-in AI Translator/Prompt APIs.
 async function lookupWithBuiltInAI(word, contextSentence) {
   const key = word.toLowerCase();
-  // 想要的英文提示（随便选一个/改成你喜欢的）
-  const fallback = "Click the highlight word to translate";
+  // Sample English prompts (pick one or change to your preference)
+  const fallback = "Click the highlighted word to translate";
   const meaning = MINI_DICT[key] || fallback;
   return { pos: "?", short: meaning };
 }
@@ -134,21 +134,21 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       }
       
       if (msg.type === "ADD_VOCAB") {
-        await addToVocab(msg.payload);   // 这里会处理 deck、example 等逻辑
+        await addToVocab(msg.payload);   // this will handle deck, example logic
         sendResponse({ ok: true });
-        return; // 别忘了 return，否则会继续往下走
+        return; // don't forget to return, otherwise execution continues
       }
 
       if (msg.type === "OPEN_SIDEPANEL") {
         try {
           const tabId = sender?.tab?.id;
-          // 确保为当前 tab 启用 side panel，并指定路径
+          // ensure side panel is enabled for current tab and specify path
           await chrome.sidePanel.setOptions({
             tabId,
             path: "sidepanel.html",
             enabled: true,
           });
-          // 打开
+          // open
           await chrome.sidePanel.open({ tabId });
           sendResponse({ ok: true });
         } catch (e) {

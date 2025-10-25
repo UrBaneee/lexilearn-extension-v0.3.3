@@ -1,8 +1,8 @@
-// 记录每种 targetLang 是否已预热
+// Track whether each targetLang has been prewarmed
 const __lexiWarm = new Map();
 
 async function ensureTranslatorWarmed() {
-  // 读取当前目标语言
+  // Read current target language
   const { targetLang = 'zh-CN' } = await new Promise(r => chrome.storage.local.get({ targetLang: 'zh-CN' }, r));
   if (__lexiWarm.get(targetLang)) return true;
 
@@ -16,19 +16,19 @@ async function ensureTranslatorWarmed() {
   return false;
 }
 
-// ── Single-inject guard (DOM sentinel; page⇆content 可见) ──
+// ── Single-inject guard (DOM sentinel; visible to page⇆content) ──
 const LEXI_SENTINEL = 'data-lexi-injected';
 const root = document.documentElement;
 
 if (root.hasAttribute(LEXI_SENTINEL)) {
   console.log('[Lexi] already running, skip new inject');
-  // 直接 return，避免重复初始化
-  // 注意：旧脚本失效时，请务必刷新页面让新脚本接管
+  // return early to avoid double initialization
+  // Note: if old script is stale, refresh the page to let the new script take over
 } else {
-  root.setAttribute(LEXI_SENTINEL, 'alive');   // 用 DOM 标记，页面 Console 也能看到
+  root.setAttribute(LEXI_SENTINEL, 'alive');   // mark in DOM so page Console can see it too
   console.log('[Lexi] initializing fresh content script...');
 
-  // ── Utils: TTS（与 loadTxtSet / onEnter 平级） ──
+  // ── Utils: TTS (same level as loadTxtSet / onEnter) ──
   function playPronunciation(word, lang = 'en-US') {
     try {
       const utter = new SpeechSynthesisUtterance(word);
@@ -49,38 +49,38 @@ if (root.hasAttribute(LEXI_SENTINEL)) {
         };
         speechSynthesis.addEventListener('voiceschanged', once);
       } else {
-        speechSynthesis.cancel(); // 避免叠音
+    speechSynthesis.cancel(); // avoid overlapping audio
         speechSynthesis.speak(utter);
       }
     } catch (e) {
       console.warn('[Lexi] TTS failed:', e);
     }
   }
-  // 提取所在句子（从最近段落/标题/列表项里找，按句号切分，选包含目标词的那句）
+  // Extract the sentence containing the word (from nearest paragraph/header/list item), split on sentence endings and pick the one containing the target word
   function extractExample(span, word) {
     const blk = span.closest('p, li, blockquote, h1, h2, h3, h4, h5, h6') || span.parentElement;
     const raw = (blk?.innerText || '').replace(/\s+/g, ' ').trim();
     if (!raw) return null;
 
     const W = word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); // escape
-    const parts = raw.split(/(?<=[.!?])\s+/); // 句子切分（简单够用）
+  const parts = raw.split(/(?<=[.!?])\s+/); // simple sentence split (good enough)
     let best = parts.find(s => new RegExp(`\\b${W}\\b`, 'i').test(s)) || parts[0] || '';
-    best = best.slice(0, 260); // 控最大长度
+  best = best.slice(0, 260); // limit max length
     const html = best.replace(new RegExp(`\\b(${W})\\b`, 'gi'), '<mark class="lexi-mark-in-sent">$1</mark>');
     return { text: best, html };
   }
 
-  // 译文缓存：同一个词/语言只翻译一次
+  // Translation cache: translate a given word/language only once
   const __lexiTransCache = new Map(); // key: "word|lang" -> translation
-  let __lexiHoverSeq = 0;             // 并发序号，防止旧请求覆盖新结果
+  let __lexiHoverSeq = 0;             // Concurrency sequence number to avoid older requests overwriting newer results
 
   function cleanMeaning(s) {
     if (!s) return "";
     return String(s).replace(/^Meaning\s*\(.*?\)\s*:\s*/i, "").trim();
   }
 
-  // 把翻译追加/更新到 tooltip（绿色一行）
-  // 统一：只保留单参版本
+  // Append/update translation to tooltip (the green line)
+  // Note: keep only the single-argument version
   function appendTranslationToTip(translation) {
     if (tip.style.display === "none") return;
     const meanDiv = tip.querySelector(".lexi-mean");
@@ -99,7 +99,7 @@ if (root.hasAttribute(LEXI_SENTINEL)) {
     }
   }
 
-  // 朗读整句（沿用你的 TTS，给句子一个更慢的速率）
+  // Read whole sentence (reuse TTS, with slightly slower rate)
   function speakSentence(text, lang = 'en-US') {
     try {
       const u = new SpeechSynthesisUtterance(text);
@@ -113,12 +113,12 @@ if (root.hasAttribute(LEXI_SENTINEL)) {
     } catch (e) { console.warn('[Lexi] speakSentence failed:', e); }
   }
 
-  // 复制到剪贴板（异步）
+  // Copy to clipboard (async)
   async function copyText(t) {
     try { await navigator.clipboard?.writeText(t); return true; } catch { return false; }
   }
 
-// ↓↓↓ 从这里开始写你原来的初始化逻辑（词表、事件绑定等）↓↓↓
+// ↓↓↓ From here, your original initialization logic starts (wordlists, event binding, etc.) ↓↓↓
   // ===== Wordlist loader =====
   let WORDLISTS = {
     cet4: null,
@@ -167,7 +167,7 @@ if (root.hasAttribute(LEXI_SENTINEL)) {
   chrome.runtime.sendMessage({ type: "GET_PREFS" }, async (res) => {
     learningMode = !!res.learningMode;
     highlightMode = res.highlightMode || "basic";
-    // 先加载词表，再扫描
+      // Load wordlists first, then scan
     await ensureWordlistsLoaded();
     if (learningMode) scanAndMark();
   });
@@ -189,21 +189,21 @@ if (root.hasAttribute(LEXI_SENTINEL)) {
     }
   });
   
-  // —— Built-in Translator 缓存 & 工具 ——
-  // translator 缓存：每种目标语言一个
+  // —— Built-in Translator cache & helpers ——
+  // translator cache: one per target language
   const __lexiTranslators = new Map(); // key: "en->zh-CN" -> Translator
 
   async function getOrCreateTranslator(targetLanguage, { requireGesture = true } = {}) {
     if (!('Translator' in self)) return null;
 
-    // 悬停不允许创建（没有用户手势时直接返回 null）
+  // Do not create on hover (return null when no user gesture)
     if (requireGesture && !navigator.userActivation?.isActive) return null;
 
     const key = `en->${targetLanguage}`;
     const cached = __lexiTranslators.get(key);
     if (cached) return cached;
 
-    try {
+  try {
       const tr = await Translator.create({ sourceLanguage: 'en', targetLanguage });
       __lexiTranslators.set(key, tr);
       return tr;
@@ -279,31 +279,31 @@ if (root.hasAttribute(LEXI_SENTINEL)) {
     return w.toLowerCase();
   }
   
-  // 判断是否“疑似专有名词”（TitleCase 且不在任何词表/常见集）
-  // 只做轻量启发式，尽量不误伤普通单词
+  // Heuristic: detect probable proper nouns (TitleCase and not in any wordlist/common set)
+  // Keep heuristic light to avoid false positives for regular words
   function isProbProperNounSurface(surface) {
-    // 1) 只拦 TitleCase：首字母大写+后续小写（"Boston"），
-    //    全大写缩写（"USA", "AI"）不在这里处理，交给其它规则
+    // 1) Only block TitleCase: initial uppercase followed by lowercase (e.g., "Boston").
+    //    All-caps abbreviations like "USA" or "AI" are not handled here.
     if (!/^[A-Z][a-z]+(?:[-'][A-Za-z]+)*$/.test(surface)) return false;
     
-    // 2) 不拦很短的（如 "It", "We"），长度<=2 放过
+    // 2) Allow very short words (length <= 2)
     if (surface.length <= 2) return false;
     
-    // 3) 如果出现在任何词表/常见列表，则不是专有名词
+    // 3) If word appears in any wordlist/common set, it's not a proper noun
     const t = surface.toLowerCase();
     if (COMMON.has(t)) return false;
     if (WORDLISTS.cet4 && WORDLISTS.cet4.has(t)) return false;
     if (WORDLISTS.freq5k && WORDLISTS.freq5k.has(t)) return false;
     if (WORDLISTS.gre && WORDLISTS.gre.has(t)) return false;
     
-    // 4) 白名单（月份/星期等常见首字母大写词）
+    // 4) Whitelist months/days etc.
     const whitelist = new Set([
       "Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday",
       "January","February","March","April","May","June","July","August","September","October","November","December"
     ]);
     if (whitelist.has(surface)) return false;
     
-    return true; // 满足上述条件 → 认为是专有名词
+    return true; // If all checks pass -> treat as a proper noun
   }
   
   function shouldHighlight(w) {
@@ -311,23 +311,23 @@ if (root.hasAttribute(LEXI_SENTINEL)) {
     if (t.length < 4) return false;
     if (COMMON.has(t)) return false;
 
-    // 一次只加一条，测试通过再加下一条
-    // ① 排除常见词
+  // Apply one rule at a time; verify before adding more rules
+  // ① Exclude common words
     if (WORDLISTS.freq5k && WORDLISTS.freq5k.has(t)) return false;
 
-    // ② 你的额外停用词
+  // ② Your additional stopwords
     if (WORDLISTS.stopExtra && WORDLISTS.stopExtra.has(t)) return false;
 
-    // 仅在非 GRE-only 模式下启用；并且要传入“原始 surface”，不能先 toLowerCase
+    // Enabled only when not in gre-only mode; pass original surface (don't lowercase first)
     if (highlightMode !== "gre-only" && isProbProperNounSurface(w)) return false;
 
-    // —— 模式开关 ——
+    // —— Mode switch ——
     if (highlightMode === "gre-only") {
-      // gre-only 时：gre 列表必须命中；若 gre 列表为空，也不要“全亮”
+      // In gre-only mode: must match the gre list; if gre list is empty, do not highlight everything
        return WORDLISTS.gre && WORDLISTS.gre.size ? WORDLISTS.gre.has(t) : false;
     }
 
-    return true;   // 先不考虑任何词表，确认管道正常
+    return true;   // For now, ignore wordlists and confirm the pipeline is working
   }
 
   function isVisible(el) {
@@ -354,7 +354,7 @@ if (root.hasAttribute(LEXI_SENTINEL)) {
   }
 
   function onEnter(e) {
-    // 动态生成 deck 菜单
+  // Dynamically generate deck menu
     async function updateDeckMenu(menuEl) {
       const { vocab = [] } = await chrome.storage.local.get({ vocab: [] });
       const decks = [...new Set(vocab.map(v => v.deck || "default"))];
@@ -363,18 +363,18 @@ if (root.hasAttribute(LEXI_SENTINEL)) {
         .map(d => `<div class="mi" data-deck="${d}" role="menuitem">📘 ${d}</div>`)
         .join('') + `<div class="mi" data-deck="new" role="menuitem">➕ New deck...</div>`;
     }
-    // —— 安全保护：扩展上下文失效直接返回（避免报错）——
-    if (typeof chrome === "undefined" || !chrome.runtime || !chrome.runtime.id) return;
+  // Safety guard: if extension context is missing, return to avoid errors
+  if (typeof chrome === "undefined" || !chrome.runtime || !chrome.runtime.id) return;
 
     const span = e.currentTarget;
     const word = span.textContent?.trim() || "";
     const context = getContextSentence(span);
 
-    // 先画一个“骨架”
-    tip.innerHTML = "Loading…";
+  // Render a skeleton first
+  tip.innerHTML = "Loading…";
     showTipNear(span);
 
-    // 查义（你原来的管道）
+  // Lookup meaning (your existing pipeline)
     chrome.runtime.sendMessage(
       { type: "LOOKUP_WORD", payload: { word, context } },
       (res) => {
@@ -386,10 +386,10 @@ if (root.hasAttribute(LEXI_SENTINEL)) {
         const { pos, short } = res.data || {};
         const safeShort = cleanMeaning(short) || "";
 
-        // 可选：抓例句（你已有的实现）
+  // Optional: fetch example sentence (use your existing implementation)
         const ex = extractExample(span, word); // => { html, text } | null
 
-        // ======== 单一版本的 tooltip 头部 + Add 下拉菜单 ========
+  // ======== Single-version tooltip header + Add dropdown ========
         tip.innerHTML = `
         <div class="lexi-head">
           <div class="lexi-word-row">
@@ -398,16 +398,16 @@ if (root.hasAttribute(LEXI_SENTINEL)) {
             <span class="lexi-pos">${pos || ""}</span>
             <div class="lexi-spacer"></div>
 
-            <!-- ▼ Add + 下拉菜单 -->
+            <!-- ▼ Add + dropdown menu -->
             <div id="lexi-add-wrap" class="lexi-add-wrap">
               <button class="lexi-btn" id="lexi-add" title="Add to deck">+ Add</button>
               <div id="lexi-add-menu" class="lexi-menu hidden" role="menu" aria-hidden="true">
                 <div class="mi selected" data-deck="default" role="menuitem">My deck</div>
                 <div class="mi" data-deck="listening" role="menuitem">Listening deck</div>
                 <div class="mi" data-deck="new" role="menuitem">+ New deck…</div>
-              </div>
-            </div>
-            <!-- ▲ Add + 下拉菜单 -->
+        </div>
+      </div>
+      <!-- ▲ Add + dropdown menu -->
 
             <button class="lexi-btn" id="lexi-close" title="Close">✕</button>
           </div>
@@ -431,25 +431,25 @@ if (root.hasAttribute(LEXI_SENTINEL)) {
         <div class="lexi-source">via Chrome built-in AI</div>
       `;
 
-        // ======== 事件：发音 ========
+        // ======== Event: Pronounce ========
         tip.querySelector(".lexi-audio")?.addEventListener("click", async (ev) => {
           ev.stopPropagation();
           playPronunciation(word);
         });
 
-        // ======== 事件：+Add（展开/收起菜单） ========
+        // ======== Event: +Add (toggle menu) ========
         const addBtn = document.getElementById("lexi-add");
         const addMenu = document.getElementById("lexi-add-menu");
-        // 点击 +Add 按钮时：动态更新最新 deck 列表并展开菜单
+        // On +Add click: dynamically refresh deck list and toggle the menu
         addBtn.onclick = async (ev) => {
           ev.stopPropagation();
-          // ✅ 在展开前调用 updateDeckMenu() 更新菜单内容
+          // ✅ Call updateDeckMenu() before opening to refresh the menu contents
           await updateDeckMenu(addMenu);
           const hidden = addMenu.classList.toggle("hidden");
           addMenu.setAttribute("aria-hidden", hidden ? "true" : "false");
         };
 
-        // 点击菜单项：记录 deck，立即发送 ADD_VOCAB
+        // On menu item click: record selected deck and send ADD_VOCAB
         addMenu.addEventListener("click", async (ev) => {
           const item = ev.target.closest(".mi");
           if (!item) return;
@@ -457,46 +457,46 @@ if (root.hasAttribute(LEXI_SENTINEL)) {
 
           let deck = item.dataset.deck || "default";
 
-          // 高亮当前选中项
+          // Highlight the currently selected item
           addMenu.querySelectorAll(".mi").forEach((el) => el.classList.remove("selected"));
           item.classList.add("selected");
 
-          // “new” -> 询问新名字
+          // 'new' -> prompt for a new name
           if (deck === "new") {
             const name = prompt("New deck name:");
-            if (!name) return; // 放弃
+            if (!name) return; // cancel
             deck = name.trim();
           }
 
-          // 收起菜单
+          // Collapse menu
           addMenu.classList.add("hidden");
           addMenu.setAttribute("aria-hidden", "true");
 
-          // 组装 payload 同你现在的一样……
+          // Assemble payload the same way you currently do...
           const payload = {
             word,
             lemma: span.dataset.lemma,
             url: location.href,
             meaning: cleanMeaning(short),
             example: ex ? { text: ex.text, url: location.href } : undefined,
-            deck, // ← 这是你刚选中的 deck
+            deck, // ← this is the deck you just selected
           };
 
           chrome.runtime.sendMessage({ type: "ADD_VOCAB", payload }, async (res) => {
             tip.querySelector(".lexi-source").textContent = "Added ✓";
             setTimeout(hideTip, 800);
 
-            // ➜ 添加成功后，打开 Side Panel
+            // ➜ After successful add, open Side Panel
             try {
               await chrome.runtime.sendMessage({ type: "OPEN_SIDEPANEL" });
             } catch { }
           });
 
-        // ======== 事件：Example 按钮 ========
+        // ======== Event: Example buttons ========
         if (ex) {
           tip.querySelector(".ex-say")?.addEventListener("click", (ev) => {
             ev.stopPropagation();
-            speakSentence?.(ex.text); // 若你已实现 speakSentence
+            speakSentence?.(ex.text); // if you have implemented speakSentence
           });
 
           tip.querySelector(".ex-copy")?.addEventListener("click", async (ev) => {
@@ -511,14 +511,14 @@ if (root.hasAttribute(LEXI_SENTINEL)) {
           });
         }
 
-        // 关闭
-        document.getElementById("lexi-close").onclick = hideTip;
+  // Close
+  document.getElementById("lexi-close").onclick = hideTip;
 
-        // ======== Hover 自动翻译（已预热才使用；不会在这里强制创建） ========
-        tip.dataset.word = word;                   // 给本次 tooltip 记住是什么词
-        const mySeq = ++__lexiHoverSeq;           // 递增序号，避免竞态
+        // ======== Hover auto-translation (only used if prewarmed; won't create translator here) ========
+  tip.dataset.word = word;                   // Remember which word this tooltip is for
+        const mySeq = ++__lexiHoverSeq;           // increment sequence to avoid races
         chrome.storage.local.get({ targetLang: "zh-CN" }, async ({ targetLang }) => {
-          // 命中缓存 → 直接渲染
+          // Cache hit -> render directly
           const cacheKey = `${word.toLowerCase()}|${targetLang}`;
           const cached = __lexiTransCache.get(cacheKey);
           if (cached && mySeq === __lexiHoverSeq) {
@@ -527,9 +527,9 @@ if (root.hasAttribute(LEXI_SENTINEL)) {
           }
 
           try {
-            // 只在已预热的情况下复用（不创建）：requireGesture:false
+            // Reuse only when already prewarmed (don't create): requireGesture:false
             const tr = await getOrCreateTranslator(targetLang, { requireGesture: false });
-            if (!tr) return; // 还没预热：静默；用户点击后再创建
+            if (!tr) return; // Not prewarmed yet: fail silently; user click can create
 
             const r = await tr.translate(word);
             const t = r?.translation || "";
@@ -538,7 +538,7 @@ if (root.hasAttribute(LEXI_SENTINEL)) {
               appendTranslationToTip(t);
             }
           } catch (err) {
-            // 静默：hover 场景失败不弹 GTranslate，只是不展示翻译
+            // Fail silently: in hover scenario don't open Google Translate, just don't show translation
           }
         });
 
@@ -549,7 +549,7 @@ if (root.hasAttribute(LEXI_SENTINEL)) {
 
   function onLeave() {
     // Keep tooltip if mouse moves into it
-    // (do nothing; close via × 或点击空白区域)
+    // (do nothing; close via × or clicking outside)
   }
   
   function onClickWord(e) {
@@ -561,7 +561,7 @@ if (root.hasAttribute(LEXI_SENTINEL)) {
     const word = span.textContent?.trim();
     if (!word) return;
 
-    // 调试日志：可保留
+  // Debug logs: can keep
     console.log('[Lexi] click word:', word);
     console.log('[Lexi] Translator in self?', 'Translator' in self);
     console.log('[Lexi] top frame?', window === window.top);
@@ -630,33 +630,34 @@ if (root.hasAttribute(LEXI_SENTINEL)) {
   }
   
   
-  // 点击页面空白处关闭 tooltip
-  // 点击页面：若点到高亮词 → 翻译；否则点空白处关闭 tooltip
+    // Clicking outside the page closes the tooltip
+    // On page click: if a highlighted word was clicked -> translate; otherwise clicking outside closes the tooltip
   document.addEventListener("click", (e) => {
     if (!tip.contains(e.target)) hideTip();
   }, true);
 
-  // 新增：按 Esc 关闭 tooltip
+  // New: close tooltip with Esc key
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") hideTip();
   }, true);
-  // ── 可选：自动检测扩展上下文失效并提示刷新（5s一次）
+  // ── Optional: periodically detect lost extension context and warn to refresh (runs every 5s)
   setInterval(() => {
-    // 失效典型表现：chrome.runtime 不存在 或 没有 id
+    // Typical failure signs: chrome.runtime missing or no id
     if (typeof chrome === 'undefined' || !chrome.runtime || !chrome.runtime.id) {
       console.warn('[Lexi] extension context lost. Please refresh this page.');
-      // 你也可以自动刷新（谨慎开启）：location.reload();
+  // You may auto-refresh (enable with caution): location.reload();
     }
   }, 5000);
-};
 
-// —— 首次任意点击即预热 translator（只执行一次）——
+}
+
+// —— First click prewarms translator (runs once) ——
 (function setupPrewarmOnce() {
   async function prewarmOnce() {
     document.removeEventListener('click', prewarmOnce, true);
     try {
       const { targetLang } = await chrome.storage.local.get({ targetLang: 'zh-CN' });
-      await getOrCreateTranslator(targetLang, { requireGesture: true }); // 允许创建
+      await getOrCreateTranslator(targetLang, { requireGesture: true }); // allow creation
       console.debug('[Lexi] Translator prewarmed');
     } catch { }
   }

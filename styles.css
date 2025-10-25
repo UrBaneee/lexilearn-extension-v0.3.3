@@ -78,17 +78,17 @@
   padding: 2px 6px;
 }
 
-/* 让头部容器当定位锚点 */
+/* Make the header container a positioning anchor */
 #lexi-tooltip .lexi-head {
   position: relative;
 }
 
-/* Add 按钮的包裹，用于定位菜单 */
+/* Wrapper for the Add button, used to position the menu */
 #lexi-tooltip .lexi-add-wrap {
   position: relative;
 }
 
-/* 下拉菜单 */
+/* Dropdown menu */
 #lexi-add-menu {
   position: absolute;
   right: 0;
@@ -155,7 +155,7 @@
   }
 }
 
-/* 例句区块 */
+/* Example block */
 #lexi-tooltip .lexi-ex {
   margin-top: 8px;
   padding: 8px;
@@ -186,7 +186,7 @@
   margin-top: 6px;
 }
 
-/* ===== 自动翻译部分样式 ===== */
+/* ===== Auto-translation area styles ===== */
 #lexi-tooltip .lexi-mean-zh {
   color: #0a7;
   margin-top: 6px;

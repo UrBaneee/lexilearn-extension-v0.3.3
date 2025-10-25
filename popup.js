@@ -13,11 +13,11 @@ function getActiveTab() {
 }
 
 function isSupportedUrl(url = "") {
-  // content_scripts 只匹配了 *://*/*，不会注入到 chrome://、chromewebstore:// 等页面
+  // content_scripts only match *://*/* and won't inject into chrome://, chromewebstore://, etc.
   return /^(https?:|file:)/i.test(url);
 }
 
-// 初始化 UI
+// Initialize UI
 chrome.storage.local.get({ learningMode: false, highlightMode: "basic" }, (res) => {
   if (toggle)  toggle.checked = !!res.learningMode;
   if (modeSel) modeSel.value  = res.highlightMode || "basic";
@@ -30,25 +30,25 @@ chrome.storage.local.get({ targetLang: "zh-CN" }, (res) => {
 async function notifyContent(payload) {
   const tab = await getActiveTab();
   if (!tab || !isSupportedUrl(tab.url)) {
-    // 在不支持的页面上，给出友好提示而不是抛错
+    // On unsupported pages, show a friendly warning instead of throwing an error
     console.warn("LexiLearn: current page doesn't allow content scripts.", tab?.url);
-    // 也可以把提示写进 popup（可选）
+    // Optionally you could display this message in the popup
     // document.body.insertAdjacentHTML("beforeend", "<p style='color:#c00'>Open a normal webpage (http/https) and try again.</p>");
     return;
   }
   chrome.tabs.sendMessage(tab.id, { type: "PREFS_CHANGED", payload }, () => {
-    // 吞掉可能的 lastError（例如刚刷新页面、脚本尚未注入）
+    // swallow possible lastError (e.g. page just refreshed and script not injected yet)
     void chrome.runtime.lastError;
   });
 }
 
-// Learning Mode 开关
+// Learning Mode toggle
 toggle.addEventListener("change", async () => {
   await chrome.storage.local.set({ learningMode: toggle.checked });
   await notifyContent({ learningMode: toggle.checked });
 });
 
-// 高亮模式下拉框
+// Highlight mode dropdown
 if (modeSel) {
   modeSel.addEventListener("change", async () => {
     await chrome.storage.local.set({ highlightMode: modeSel.value });
@@ -56,7 +56,7 @@ if (modeSel) {
   });
 }
 
-// 监听语言变化并保存&通知当前页
+// Listen for language changes, save & notify the current page
 if (langSel) {
   langSel.addEventListener("change", async () => {
     await chrome.storage.local.set({ targetLang: langSel.value });
@@ -64,7 +64,7 @@ if (langSel) {
   });
 }
 
-// 打开 Side Panel
+// Open Side Panel
 openSide.addEventListener("click", async (e) => {
   e.preventDefault();
   await chrome.sidePanel.open({ windowId: (await chrome.windows.getCurrent()).id });
