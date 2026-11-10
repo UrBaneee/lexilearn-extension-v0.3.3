@@ -1,71 +1,58 @@
-// popup.js — robust version
-const toggle   = document.getElementById("toggle");
-const openSide = document.getElementById("openSide");
-const modeSel  = document.getElementById("mode");
-const langSel = document.getElementById("lang");
+const toggle = document.querySelector('#toggle');
+const language = document.querySelector('#lang');
+const status = document.querySelector('#status');
+let tab;
+let highlighted = false;
 
-function getActiveTab() {
-  return new Promise((resolve) => {
-    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-      resolve(tabs && tabs[0] ? tabs[0] : null);
-    });
-  });
+function showToggle() {
+  toggle.textContent = highlighted ? 'Turn off GRE highlights' : 'Enable GRE highlights';
 }
 
-function isSupportedUrl(url = "") {
-  // content_scripts only match *://*/* and won't inject into chrome://, chromewebstore://, etc.
-  return /^(https?:|file:)/i.test(url);
-}
-
-// Initialize UI
-chrome.storage.local.get({ learningMode: false, highlightMode: "basic" }, (res) => {
-  if (toggle)  toggle.checked = !!res.learningMode;
-  if (modeSel) modeSel.value  = res.highlightMode || "basic";
-});
-
-chrome.storage.local.get({ targetLang: "zh-CN" }, (res) => {
-  if (langSel) langSel.value = res.targetLang;
-});
-
-async function notifyContent(payload) {
-  const tab = await getActiveTab();
-  if (!tab || !isSupportedUrl(tab.url)) {
-    // On unsupported pages, show a friendly warning instead of throwing an error
-    console.warn("LexiLearn: current page doesn't allow content scripts.", tab?.url);
-    // Optionally you could display this message in the popup
-    // document.body.insertAdjacentHTML("beforeend", "<p style='color:#c00'>Open a normal webpage (http/https) and try again.</p>");
+async function init() {
+  const { targetLang = 'zh' } = await chrome.storage.local.get('targetLang');
+  language.value = ({ 'zh-CN': 'zh', 'zh-TW': 'zh-Hant' })[targetLang] || targetLang;
+  [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!/^https?:/.test(tab?.url || '')) {
+    status.textContent = 'GRE highlights are available on ordinary web pages.';
     return;
   }
-  chrome.tabs.sendMessage(tab.id, { type: "PREFS_CHANGED", payload }, () => {
-    // swallow possible lastError (e.g. page just refreshed and script not injected yet)
-    void chrome.runtime.lastError;
-  });
+  highlighted = !!(await chrome.tabs.sendMessage(tab.id, { type: 'HIGHLIGHT_STATUS' }).catch(() => false));
+  showToggle();
+  toggle.disabled = false;
 }
 
-// Learning Mode toggle
-toggle.addEventListener("change", async () => {
-  await chrome.storage.local.set({ learningMode: toggle.checked });
-  await notifyContent({ learningMode: toggle.checked });
+language.addEventListener('change', async () => {
+  try {
+    await chrome.storage.local.set({ targetLang: language.value });
+  } catch {
+    status.textContent = 'Could not save the language setting.';
+  }
 });
 
-// Highlight mode dropdown
-if (modeSel) {
-  modeSel.addEventListener("change", async () => {
-    await chrome.storage.local.set({ highlightMode: modeSel.value });
-    await notifyContent({ highlightMode: modeSel.value });
-  });
-}
-
-// Listen for language changes, save & notify the current page
-if (langSel) {
-  langSel.addEventListener("change", async () => {
-    await chrome.storage.local.set({ targetLang: langSel.value });
-    await notifyContent({ targetLang: langSel.value });
-  });
-}
-
-// Open Side Panel
-openSide.addEventListener("click", async (e) => {
-  e.preventDefault();
-  await chrome.sidePanel.open({ windowId: (await chrome.windows.getCurrent()).id });
+toggle.addEventListener('click', async () => {
+  toggle.disabled = true;
+  status.textContent = '';
+  try {
+    const target = { tabId: tab.id };
+    if (!highlighted) await chrome.scripting.insertCSS({ target, files: ['highlights.css'] });
+    await chrome.scripting.executeScript({ target, files: ['lookup.js', 'content.js'] });
+    const result = await chrome.tabs.sendMessage(tab.id, { type: 'SET_HIGHLIGHTS', enabled: !highlighted });
+    if (!result?.ok) throw new Error(result?.error);
+    highlighted = result.enabled;
+    showToggle();
+    status.textContent = highlighted ? 'Click a highlighted word to look it up.' : 'GRE highlights are off.';
+  } catch {
+    status.textContent = 'Could not change highlights on this page.';
+  } finally {
+    toggle.disabled = false;
+  }
 });
+
+document.querySelector('#openSide').addEventListener('click', () => {
+  if (!tab) return;
+  chrome.sidePanel.open({ windowId: tab.windowId }).catch(() => {
+    status.textContent = 'Could not open the vocabulary panel.';
+  });
+});
+
+init().catch(() => { status.textContent = 'Could not read extension settings.'; });

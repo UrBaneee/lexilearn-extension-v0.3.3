@@ -1,0 +1,17 @@
+:root { color-scheme: light dark; font: 14px/1.45 system-ui, sans-serif; }
+body { background: Canvas; color: CanvasText; margin: 14px; }
+h1 { font-size: 20px; margin: 0 0 8px; }
+h2 { font-size: 15px; margin: 16px 0 4px; }
+p { margin: 7px 0; }
+.muted, #status { font-size: 12px; }
+button, input, select { font: inherit; color: CanvasText; background: Canvas; border: 1px solid GrayText;
+  border-radius: 7px; padding: 5px 8px; }
+button { cursor: pointer; }
+button:disabled { opacity: .55; cursor: default; }
+.primary, button[aria-pressed=true] { color: #fff; background: #244fc2; border-color: #244fc2; }
+.actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.popup { width: 255px; }
+.popup button, .popup select, #search { display: block; box-sizing: border-box; width: 100%; margin: 8px 0; }
+article { margin: 6px 0; padding: 10px; border: 1px solid GrayText; border-radius: 9px; overflow-wrap: anywhere; }
+article strong { font-size: 15px; }
+blockquote { margin: 8px 0; padding-inline-start: 8px; border-inline-start: 2px solid GrayText; }

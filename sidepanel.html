@@ -1,16 +1,24 @@
 <!doctype html>
-<html>
-
+<html lang="en">
 <head>
-  <meta charset="utf-8" />
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>LexiLearn · Vocabulary</title>
+  <link rel="stylesheet" href="panel.css">
 </head>
-
-<body>
-  <div id="list"></div>
-  <!-- Be sure to load XLSX first, then your sidepanel.js -->
-  <script src="./vendor/xlsx/xlsx.full.min.js"></script>
-  <script src="./sidepanel.js"></script>
+<body class="sidepanel">
+  <header>
+    <h1>My vocabulary</h1>
+    <div class="actions">
+      <button id="review" type="button" aria-pressed="false">Review</button>
+      <button id="export" type="button">Export Excel</button>
+      <button id="clear" type="button">Clear all</button>
+    </div>
+  </header>
+  <input id="search" type="search" aria-label="Search vocabulary" placeholder="Search words, meanings, or decks">
+  <p id="status" role="status"></p>
+  <main id="list"></main>
+  <script src="vendor/xlsx/xlsx.full.min.js"></script>
+  <script type="module" src="sidepanel.js"></script>
 </body>
-
 </html>

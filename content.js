@@ -1,665 +1,316 @@
-// Track whether each targetLang has been prewarmed
-const __lexiWarm = new Map();
+(() => {
+  if (globalThis.lexiReading) return;
+  globalThis.lexiReading = true;
 
-async function ensureTranslatorWarmed() {
-  // Read current target language
-  const { targetLang = 'zh-CN' } = await new Promise(r => chrome.storage.local.get({ targetLang: 'zh-CN' }, r));
-  if (__lexiWarm.get(targetLang)) return true;
+  const blockSelector = 'p, li, dd, dt, blockquote, figcaption, td, h1, h2, h3, h4, h5, h6, div';
+  const ignored = 'script, style, noscript, code, pre, input, textarea, select, button, [contenteditable], [hidden]';
+  const segmenter = new Intl.Segmenter('en', { granularity: 'sentence' });
+  const highlightName = 'lexilearn-gre';
+  const host = document.createElement('div');
+  const shadow = host.attachShadow({ mode: 'closed' });
+  const style = new CSSStyleSheet();
+  style.replaceSync(`
+    :host { all: initial; color-scheme: light dark; }
+    section { position: fixed; z-index: 2147483647; box-sizing: border-box; width: min(350px, calc(100vw - 16px));
+      max-height: calc(100vh - 16px); overflow: auto; padding: 14px; border: 1px solid GrayText;
+      border-radius: 12px; background: Canvas; color: CanvasText; box-shadow: 0 6px 24px #0004;
+      font: 14px/1.45 system-ui, sans-serif; overflow-wrap: anywhere; }
+    header, .actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+    header strong { flex: 1; font-size: 17px; }
+    p { margin: 8px 0; }
+    blockquote { margin: 8px 0; padding-inline-start: 8px; border-inline-start: 2px solid GrayText; }
+    button, select, input { font: inherit; color: CanvasText; background: Canvas; border: 1px solid GrayText;
+      border-radius: 6px; padding: 4px 7px; }
+    input { box-sizing: border-box; width: 100%; margin: 8px 0; }
+    button { cursor: pointer; }
+    button:disabled { opacity: .6; cursor: default; }
+    a { color: LinkText; }
+    .muted { font-size: 12px; }
+  `);
+  shadow.adoptedStyleSheets = [style];
+  document.documentElement.append(host);
 
-  try {
-    const tr = await getOrCreateTranslator(targetLang, { requireGesture: true });
-    if (tr) {
-      __lexiWarm.set(targetLang, true);
-      return true;
-    }
-  } catch { }
-  return false;
-}
+  let card;
+  let gre;
+  let known = new Set();
+  let enabled = false;
+  let marked = new Map();
+  let refreshTimer;
 
-// ── Single-inject guard (DOM sentinel; visible to page⇆content) ──
-const LEXI_SENTINEL = 'data-lexi-injected';
-const root = document.documentElement;
+  async function request(message) {
+    const result = await chrome.runtime.sendMessage(message);
+    if (!result?.ok) throw new Error(result?.error || 'LexiLearn could not finish the request.');
+    return result.data;
+  }
 
-if (root.hasAttribute(LEXI_SENTINEL)) {
-  console.log('[Lexi] already running, skip new inject');
-  // return early to avoid double initialization
-  // Note: if old script is stale, refresh the page to let the new script take over
-} else {
-  root.setAttribute(LEXI_SENTINEL, 'alive');   // mark in DOM so page Console can see it too
-  console.log('[Lexi] initializing fresh content script...');
+  function element(tag, text, parent) {
+    const item = document.createElement(tag);
+    if (text) item.textContent = text;
+    if (parent) parent.append(item);
+    return item;
+  }
 
-  // ── Utils: TTS (same level as loadTxtSet / onEnter) ──
-  function playPronunciation(word, lang = 'en-US') {
-    try {
-      const utter = new SpeechSynthesisUtterance(word);
-      utter.lang = lang;
-      utter.rate = 0.95;
-      const pick = (voices) =>
-        voices.find(v => v.lang.startsWith('en') && /female|samantha|victoria|allison/i.test(v.name))
-        || voices.find(v => v.lang.startsWith('en'));
-      const voices = speechSynthesis.getVoices();
-      const v = pick(voices);
-      if (v) utter.voice = v;
-      if (!voices.length) {
-        const once = () => {
-          const v2 = pick(speechSynthesis.getVoices());
-          if (v2) utter.voice = v2;
-          speechSynthesis.speak(utter);
-          speechSynthesis.removeEventListener('voiceschanged', once);
-        };
-        speechSynthesis.addEventListener('voiceschanged', once);
-      } else {
-    speechSynthesis.cancel(); // avoid overlapping audio
-        speechSynthesis.speak(utter);
+  function button(text, parent, action) {
+    const item = element('button', text, parent);
+    item.type = 'button';
+    item.addEventListener('click', action);
+    return item;
+  }
+
+  function closeCard() {
+    card?.remove();
+    card = undefined;
+  }
+
+  function getSentence(range) {
+    if (!range) return '';
+    const node = range.startContainer;
+    const block = (node.parentElement || node).closest(blockSelector);
+    if (!block || !block.contains(range.endContainer)) return '';
+    const before = document.createRange();
+    before.selectNodeContents(block);
+    before.setEnd(node, range.startOffset);
+    const offset = before.toString().length;
+    const sentence = segmenter.segment(block.textContent).containing(offset);
+    if (!sentence) return '';
+    const start = Math.max(0, offset - sentence.index - 160);
+    return sentence.segment.slice(start, start + 360).replace(/\s+/g, ' ').trim();
+  }
+
+  async function showCard(word, range) {
+    const selection = word.replace(/\s+/g, ' ').trim();
+    if (!selection || selection.length > 120) return;
+    const sentence = getSentence(range);
+    const anchor = range?.getBoundingClientRect();
+    closeCard();
+
+    const panel = card = element('section', '', shadow);
+    panel.setAttribute('role', 'dialog');
+    panel.setAttribute('aria-label', 'LexiLearn lookup');
+    panel.tabIndex = -1;
+    const header = element('header', '', panel);
+    element('strong', selection, header);
+    button('Listen', header, () => {
+      const voice = speechSynthesis.getVoices().find(item => item.localService && item.lang.startsWith('en'));
+      if (!voice) {
+        status.textContent = 'No local English voice is available.';
+        return;
       }
-    } catch (e) {
-      console.warn('[Lexi] TTS failed:', e);
-    }
-  }
-  // Extract the sentence containing the word (from nearest paragraph/header/list item), split on sentence endings and pick the one containing the target word
-  function extractExample(span, word) {
-    const blk = span.closest('p, li, blockquote, h1, h2, h3, h4, h5, h6') || span.parentElement;
-    const raw = (blk?.innerText || '').replace(/\s+/g, ' ').trim();
-    if (!raw) return null;
-
-    const W = word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); // escape
-  const parts = raw.split(/(?<=[.!?])\s+/); // simple sentence split (good enough)
-    let best = parts.find(s => new RegExp(`\\b${W}\\b`, 'i').test(s)) || parts[0] || '';
-  best = best.slice(0, 260); // limit max length
-    const html = best.replace(new RegExp(`\\b(${W})\\b`, 'gi'), '<mark class="lexi-mark-in-sent">$1</mark>');
-    return { text: best, html };
-  }
-
-  // Translation cache: translate a given word/language only once
-  const __lexiTransCache = new Map(); // key: "word|lang" -> translation
-  let __lexiHoverSeq = 0;             // Concurrency sequence number to avoid older requests overwriting newer results
-
-  function cleanMeaning(s) {
-    if (!s) return "";
-    return String(s).replace(/^Meaning\s*\(.*?\)\s*:\s*/i, "").trim();
-  }
-
-  // Append/update translation to tooltip (the green line)
-  // Note: keep only the single-argument version
-  function appendTranslationToTip(translation) {
-    if (tip.style.display === "none") return;
-    const meanDiv = tip.querySelector(".lexi-mean");
-    if (!meanDiv) return;
-
-    const ex = tip.querySelector(".lexi-mean-zh");
-    if (ex) {
-      ex.textContent = translation || "";
-    } else {
-      const zh = document.createElement("div");
-      zh.className = "lexi-mean-zh";
-      zh.style.marginTop = "6px";
-      zh.style.color = "#0a7";
-      zh.textContent = translation || "";
-      meanDiv.insertAdjacentElement("afterend", zh);
-    }
-  }
-
-  // Read whole sentence (reuse TTS, with slightly slower rate)
-  function speakSentence(text, lang = 'en-US') {
-    try {
-      const u = new SpeechSynthesisUtterance(text);
-      u.lang = lang; u.rate = 0.92;
-      const voices = speechSynthesis.getVoices();
-      const pick = voices.find(v => v.lang.startsWith('en') && /female|samantha|victoria|allison/i.test(v.name))
-        || voices.find(v => v.lang.startsWith('en'));
-      if (pick) u.voice = pick;
+      const utterance = new SpeechSynthesisUtterance(selection);
+      utterance.voice = voice;
       speechSynthesis.cancel();
-      speechSynthesis.speak(u);
-    } catch (e) { console.warn('[Lexi] speakSentence failed:', e); }
-  }
-
-  // Copy to clipboard (async)
-  async function copyText(t) {
-    try { await navigator.clipboard?.writeText(t); return true; } catch { return false; }
-  }
-
-// ↓↓↓ From here, your original initialization logic starts (wordlists, event binding, etc.) ↓↓↓
-  // ===== Wordlist loader =====
-  let WORDLISTS = {
-    cet4: null,
-    gre: null,
-    stopExtra: null,
-    freq5k: null
-  };
-  let highlightMode = "basic"; // default
-
-  async function loadTxtSet(path) {
-    const url = chrome.runtime.getURL(path);
-    const txt = await fetch(url).then(r => r.text());
-    const set = new Set();
-    txt.split(/\r?\n/).forEach(line => {
-      const w = line.trim().toLowerCase();
-      if (w) set.add(w);
+      speechSynthesis.speak(utterance);
     });
-    return set;
-  }
-  
-  async function ensureWordlistsLoaded() {
-    const jobs = [];
-    if (!WORDLISTS.cet4) jobs.push(loadTxtSet("assets/lists/cet4.txt").then(s => WORDLISTS.cet4 = s).catch(()=>WORDLISTS.cet4=new Set()));
-    if (!WORDLISTS.gre) jobs.push(loadTxtSet("assets/lists/gre.txt").then(s => WORDLISTS.gre = s).catch(()=>WORDLISTS.gre=new Set()));
-    if (!WORDLISTS.stopExtra) jobs.push(loadTxtSet("assets/lists/stopwords_extra.txt").then(s => WORDLISTS.stopExtra = s).catch(()=>WORDLISTS.stopExtra=new Set()));
-    if (!WORDLISTS.freq5k) jobs.push(loadTxtSet("assets/lists/freq_top5000.txt").then(s => WORDLISTS.freq5k = s).catch(()=>WORDLISTS.freq5k=new Set()));
-    await Promise.all(jobs);
-  }
+    const close = button('×', header, closeCard);
+    close.setAttribute('aria-label', 'Close');
+    if (sentence) element('blockquote', sentence, panel);
 
-  window.__lexiInjected = true;
-
-  const COMMON = new Set([
-    "the","be","to","of","and","a","in","that","have","i","it","for","not",
-    "on","with","he","as","you","do","at","this","but","his","by","from"
-  ]);
-
-  let learningMode = false;
-
-  // Tooltip element
-  const tip = document.createElement("div");
-  tip.id = "lexi-tooltip";
-  tip.style.display = "none";
-  document.documentElement.appendChild(tip);
-
-  // Observe prefs
-  chrome.runtime.sendMessage({ type: "GET_PREFS" }, async (res) => {
-    learningMode = !!res.learningMode;
-    highlightMode = res.highlightMode || "basic";
-      // Load wordlists first, then scan
-    await ensureWordlistsLoaded();
-    if (learningMode) scanAndMark();
-  });
-
-  // Listen pref changes from popup
-  chrome.runtime.onMessage.addListener((msg) => {
-    if (msg.type === "PREFS_CHANGED") {
-      if (msg.payload.hasOwnProperty("learningMode")) {
-        learningMode = !!msg.payload.learningMode;
+    const lookups = element('div', '', panel);
+    lookups.className = 'actions';
+    const status = element('p', '', panel);
+    status.className = 'muted';
+    status.setAttribute('role', 'status');
+    const meaning = element('input', '', panel);
+    meaning.maxLength = 300;
+    meaning.placeholder = 'Meaning or your own note';
+    meaning.setAttribute('aria-label', 'Meaning');
+    const saveActions = element('div', '', panel);
+    saveActions.className = 'actions';
+    const deck = element('select', '', saveActions);
+    deck.setAttribute('aria-label', 'Deck');
+    const newDeck = element('input', '', panel);
+    newDeck.placeholder = 'Name of new deck';
+    newDeck.setAttribute('aria-label', 'New deck name');
+    newDeck.maxLength = 80;
+    newDeck.hidden = true;
+    deck.addEventListener('change', () => {
+      newDeck.hidden = deck.value !== 'new';
+      if (!newDeck.hidden) newDeck.focus();
+    });
+    const save = button('Save', saveActions, async () => {
+      const name = deck.value === 'new' ? newDeck.value.trim() : deck.selectedOptions[0]?.dataset.deck;
+      if (!name) {
+        status.textContent = 'Enter a deck name first.';
+        return;
       }
-      if (msg.payload.highlightMode) {
-        highlightMode = msg.payload.highlightMode;
+      save.disabled = true;
+      try {
+        await request({
+          type: 'ADD_VOCAB',
+          entry: {
+            word: selection, deck: name, url: location.href, meaning: meaning.value,
+            example: sentence ? { text: sentence, url: location.href } : undefined,
+          },
+        });
+        status.textContent = 'Saved to your vocabulary.';
+      } catch {
+        status.textContent = 'Could not save. Try again.';
+      } finally {
+        save.disabled = false;
       }
-      clearMarks();
-      (async () => {
-        await ensureWordlistsLoaded();
-        if (learningMode) scanAndMark();
-      })();
+    });
+    save.disabled = true;
+
+    if (gre?.has(selection.toLowerCase()) && !known.has(selection.toLowerCase())) {
+      const knownButton = button('I know this', saveActions, async () => {
+        try {
+          await request({ type: 'MARK_KNOWN', word: selection });
+          closeCard();
+        } catch {
+          status.textContent = 'Could not update known words.';
+        }
+      });
+      knownButton.title = 'Hide this word from GRE highlights';
     }
-  });
-  
-  // —— Built-in Translator cache & helpers ——
-  // translator cache: one per target language
-  const __lexiTranslators = new Map(); // key: "en->zh-CN" -> Translator
 
-  async function getOrCreateTranslator(targetLanguage, { requireGesture = true } = {}) {
-    if (!('Translator' in self)) return null;
+    function position() {
+      if (card !== panel) return;
+      const left = anchor?.width ? anchor.left : innerWidth / 2 - panel.offsetWidth / 2;
+      const below = anchor?.width ? anchor.bottom + 8 : 24;
+      const above = anchor?.top - panel.offsetHeight - 8;
+      panel.style.left = Math.max(8, Math.min(left, innerWidth - panel.offsetWidth - 8)) + 'px';
+      const top = below + panel.offsetHeight <= innerHeight ? below : above || 8;
+      panel.style.top = Math.max(8, Math.min(top, innerHeight - panel.offsetHeight - 8)) + 'px';
+    }
 
-  // Do not create on hover (return null when no user gesture)
-    if (requireGesture && !navigator.userActivation?.isActive) return null;
+    position();
+    panel.focus({ preventScroll: true });
+    try {
+      const { vocab = [], targetLang = 'zh' } = await chrome.storage.local.get(['vocab', 'targetLang']);
+      if (card !== panel) return;
+      const target = ({ 'zh-CN': 'zh', 'zh-TW': 'zh-Hant' })[targetLang] || targetLang;
+      for (const [index, name] of [...new Set(['default', ...vocab.map(item => item.deck || 'default')])].entries()) {
+        const label = name === 'default' ? 'My deck' : name === 'listening' ? 'Listening deck' : name;
+        const option = element('option', label, deck);
+        option.value = String(index);
+        option.dataset.deck = name;
+      }
+      element('option', 'New deck…', deck).value = 'new';
+      save.disabled = false;
+      const online = element('a', 'Open Google Translate ↗', panel);
+      const params = new URLSearchParams({ sl: 'en', tl: ({ zh: 'zh-CN', 'zh-Hant': 'zh-TW' })[target] || target, text: selection, op: 'translate' });
+      online.href = 'https://translate.google.com/?' + params;
+      online.target = '_blank';
+      online.rel = 'noopener noreferrer';
+      online.className = 'muted';
 
-    const key = `en->${targetLanguage}`;
-    const cached = __lexiTranslators.get(key);
-    if (cached) return cached;
+      function lookup(label, action, success) {
+        return button(label, lookups, async () => {
+          const actions = [...lookups.querySelectorAll('button')];
+          actions.forEach(item => { item.disabled = true; });
+          status.textContent = 'Working on this device…';
+          position();
+          try {
+            const result = await action(progress => { status.textContent = progress; position(); });
+            const text = typeof result === 'string' ? result : result.meaning;
+            if (!text) throw new Error('Chrome returned no result.');
+            meaning.value = text;
+            status.textContent = result.language && result.language !== target ? success + ' (English)' : success;
+          } catch {
+            status.textContent = label === 'Translate'
+              ? 'On-device translation is unavailable. You can add your own note or open Google Translate.'
+              : 'Context explanation is unavailable. Try Translate, or add your own note.';
+          } finally {
+            actions.forEach(item => { item.disabled = false; });
+            position();
+          }
+        });
+      }
 
-  try {
-      const tr = await Translator.create({ sourceLanguage: 'en', targetLanguage });
-      __lexiTranslators.set(key, tr);
-      return tr;
-    } catch (e) {
-      console.warn('[Lexi] Translator.create failed:', e);
-      return null;
+      if (sentence) {
+        lookup('Explain in context', onProgress => lexiLookup.explain(selection, sentence, target, onProgress),
+          'Context explanation · Chrome on-device AI');
+      }
+      lookup('Translate', onProgress => lexiLookup.translate(selection, target, onProgress),
+        'Word translation · Chrome on-device AI');
+      position();
+    } catch {
+      status.textContent = 'Could not load LexiLearn settings. Reopen the card to try again.';
+      position();
     }
   }
-  
-  function openGoogleTranslateFallback(word, targetLanguage) {
-    const url = `https://translate.google.com/?sl=en&tl=${encodeURIComponent(targetLanguage)}&text=${encodeURIComponent(word)}&op=translate`;
-    window.open(url, "_blank");
-  }
 
-  // Scan and mark words
-  function scanAndMark() {
+  function highlight() {
+    if (!enabled || !document.body) return;
     const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-    const toWrap = [];
+    const marks = new Highlight();
+    const matches = new Map();
     while (walker.nextNode()) {
       const node = walker.currentNode;
-      if (!node.nodeValue) continue;
-      if (!isVisible(node.parentElement)) continue;
-      if (isInIgnoredNode(node.parentElement)) continue;
-
-      const parts = tokenize(node.nodeValue);
-      if (!parts.some(p => p.type === "word")) continue;
-
-      // Build a new fragment with <span> wraps
-      const frag = document.createDocumentFragment();
-      parts.forEach(p => {
-        if (p.type === "word" && shouldHighlight(p.text)) {
-          const span = document.createElement("span");
-          span.className = "lexi-mark";
-          span.textContent = p.text;
-          span.dataset.lemma = normalize(p.text);
-          span.addEventListener("mouseenter", onEnter);
-          span.addEventListener("mouseleave", onLeave);
-          span.addEventListener("click", onClickWord);
-          frag.appendChild(span);
-        } else {
-          frag.appendChild(document.createTextNode(p.text));
-        }
-      });
-      toWrap.push([node, frag]);
-    }
-    // Replace nodes in batch
-    for (const [node, frag] of toWrap) node.parentNode.replaceChild(frag, node);
-  }
-
-  function clearMarks() {
-    document.querySelectorAll("span.lexi-mark").forEach((el) => {
-      const text = document.createTextNode(el.textContent);
-      el.replaceWith(text);
-    });
-    hideTip();
-  }
-
-  function tokenize(text) {
-    // Split into words and separators
-    const parts = [];
-    const re = /\b[A-Za-z][A-Za-z\-’']+\b/g;
-    let last = 0, m;
-    while ((m = re.exec(text)) !== null) {
-      if (m.index > last) parts.push({ type: "sep", text: text.slice(last, m.index) });
-      parts.push({ type: "word", text: m[0] });
-      last = re.lastIndex;
-    }
-    if (last < text.length) parts.push({ type: "sep", text: text.slice(last) });
-    return parts;
-  }
-
-  function normalize(w) {
-    return w.toLowerCase();
-  }
-  
-  // Heuristic: detect probable proper nouns (TitleCase and not in any wordlist/common set)
-  // Keep heuristic light to avoid false positives for regular words
-  function isProbProperNounSurface(surface) {
-    // 1) Only block TitleCase: initial uppercase followed by lowercase (e.g., "Boston").
-    //    All-caps abbreviations like "USA" or "AI" are not handled here.
-    if (!/^[A-Z][a-z]+(?:[-'][A-Za-z]+)*$/.test(surface)) return false;
-    
-    // 2) Allow very short words (length <= 2)
-    if (surface.length <= 2) return false;
-    
-    // 3) If word appears in any wordlist/common set, it's not a proper noun
-    const t = surface.toLowerCase();
-    if (COMMON.has(t)) return false;
-    if (WORDLISTS.cet4 && WORDLISTS.cet4.has(t)) return false;
-    if (WORDLISTS.freq5k && WORDLISTS.freq5k.has(t)) return false;
-    if (WORDLISTS.gre && WORDLISTS.gre.has(t)) return false;
-    
-    // 4) Whitelist months/days etc.
-    const whitelist = new Set([
-      "Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday",
-      "January","February","March","April","May","June","July","August","September","October","November","December"
-    ]);
-    if (whitelist.has(surface)) return false;
-    
-    return true; // If all checks pass -> treat as a proper noun
-  }
-  
-  function shouldHighlight(w) {
-    const t = w.toLowerCase();
-    if (t.length < 4) return false;
-    if (COMMON.has(t)) return false;
-
-  // Apply one rule at a time; verify before adding more rules
-  // ① Exclude common words
-    if (WORDLISTS.freq5k && WORDLISTS.freq5k.has(t)) return false;
-
-  // ② Your additional stopwords
-    if (WORDLISTS.stopExtra && WORDLISTS.stopExtra.has(t)) return false;
-
-    // Enabled only when not in gre-only mode; pass original surface (don't lowercase first)
-    if (highlightMode !== "gre-only" && isProbProperNounSurface(w)) return false;
-
-    // —— Mode switch ——
-    if (highlightMode === "gre-only") {
-      // In gre-only mode: must match the gre list; if gre list is empty, do not highlight everything
-       return WORDLISTS.gre && WORDLISTS.gre.size ? WORDLISTS.gre.has(t) : false;
-    }
-
-    return true;   // For now, ignore wordlists and confirm the pipeline is working
-  }
-
-  function isVisible(el) {
-    if (!el) return false;
-    const style = window.getComputedStyle(el);
-    if (style.display === "none" || style.visibility === "hidden") return false;
-    const rect = el.getBoundingClientRect();
-    return rect.width > 0 && rect.height > 0;
-  }
-
-  function isInIgnoredNode(el) {
-    const bad = new Set(["SCRIPT","STYLE","NOSCRIPT","CODE","PRE","TEXTAREA","INPUT","IMG","VIDEO","AUDIO"]);
-    while (el) {
-      if (bad.has(el.tagName)) return true;
-      el = el.parentElement;
-    }
-    return false;
-  }
-
-  function getContextSentence(span) {
-    // Pick the parent paragraph text as context
-    const p = span.closest("p") || span.parentElement;
-    return p ? p.innerText.slice(0, 200) : "";
-  }
-
-  function onEnter(e) {
-  // Dynamically generate deck menu
-    async function updateDeckMenu(menuEl) {
-      const { vocab = [] } = await chrome.storage.local.get({ vocab: [] });
-      const decks = [...new Set(vocab.map(v => v.deck || "default"))];
-
-      menuEl.innerHTML = decks
-        .map(d => `<div class="mi" data-deck="${d}" role="menuitem">📘 ${d}</div>`)
-        .join('') + `<div class="mi" data-deck="new" role="menuitem">➕ New deck...</div>`;
-    }
-  // Safety guard: if extension context is missing, return to avoid errors
-  if (typeof chrome === "undefined" || !chrome.runtime || !chrome.runtime.id) return;
-
-    const span = e.currentTarget;
-    const word = span.textContent?.trim() || "";
-    const context = getContextSentence(span);
-
-  // Render a skeleton first
-  tip.innerHTML = "Loading…";
-    showTipNear(span);
-
-  // Lookup meaning (your existing pipeline)
-    chrome.runtime.sendMessage(
-      { type: "LOOKUP_WORD", payload: { word, context } },
-      (res) => {
-        if (!res || !res.ok) {
-          tip.innerHTML = "No meaning available.";
-          return;
-        }
-
-        const { pos, short } = res.data || {};
-        const safeShort = cleanMeaning(short) || "";
-
-  // Optional: fetch example sentence (use your existing implementation)
-        const ex = extractExample(span, word); // => { html, text } | null
-
-  // ======== Single-version tooltip header + Add dropdown ========
-        tip.innerHTML = `
-        <div class="lexi-head">
-          <div class="lexi-word-row">
-            <span class="lexi-word">${word}</span>
-            <button class="lexi-btn lexi-audio" title="Pronounce">🔈</button>
-            <span class="lexi-pos">${pos || ""}</span>
-            <div class="lexi-spacer"></div>
-
-            <!-- ▼ Add + dropdown menu -->
-            <div id="lexi-add-wrap" class="lexi-add-wrap">
-              <button class="lexi-btn" id="lexi-add" title="Add to deck">+ Add</button>
-              <div id="lexi-add-menu" class="lexi-menu hidden" role="menu" aria-hidden="true">
-                <div class="mi selected" data-deck="default" role="menuitem">My deck</div>
-                <div class="mi" data-deck="listening" role="menuitem">Listening deck</div>
-                <div class="mi" data-deck="new" role="menuitem">+ New deck…</div>
-        </div>
-      </div>
-      <!-- ▲ Add + dropdown menu -->
-
-            <button class="lexi-btn" id="lexi-close" title="Close">✕</button>
-          </div>
-        </div>
-
-        <div class="lexi-mean">${safeShort}</div>
-
-        ${ex
-            ? `
-        <div class="lexi-ex">
-          <div class="ex-label">Example</div>
-          <div class="ex-text">${ex.html}</div>
-          <div class="ex-ops">
-            <button class="lexi-btn ex-say" title="Read aloud">🔉</button>
-            <button class="lexi-btn ex-copy" title="Copy sentence">📋</button>
-          </div>
-        </div>`
-            : ""
-          }
-
-        <div class="lexi-source">via Chrome built-in AI</div>
-      `;
-
-        // ======== Event: Pronounce ========
-        tip.querySelector(".lexi-audio")?.addEventListener("click", async (ev) => {
-          ev.stopPropagation();
-          playPronunciation(word);
-        });
-
-        // ======== Event: +Add (toggle menu) ========
-        const addBtn = document.getElementById("lexi-add");
-        const addMenu = document.getElementById("lexi-add-menu");
-        // On +Add click: dynamically refresh deck list and toggle the menu
-        addBtn.onclick = async (ev) => {
-          ev.stopPropagation();
-          // ✅ Call updateDeckMenu() before opening to refresh the menu contents
-          await updateDeckMenu(addMenu);
-          const hidden = addMenu.classList.toggle("hidden");
-          addMenu.setAttribute("aria-hidden", hidden ? "true" : "false");
-        };
-
-        // On menu item click: record selected deck and send ADD_VOCAB
-        addMenu.addEventListener("click", async (ev) => {
-          const item = ev.target.closest(".mi");
-          if (!item) return;
-          ev.stopPropagation();
-
-          let deck = item.dataset.deck || "default";
-
-          // Highlight the currently selected item
-          addMenu.querySelectorAll(".mi").forEach((el) => el.classList.remove("selected"));
-          item.classList.add("selected");
-
-          // 'new' -> prompt for a new name
-          if (deck === "new") {
-            const name = prompt("New deck name:");
-            if (!name) return; // cancel
-            deck = name.trim();
-          }
-
-          // Collapse menu
-          addMenu.classList.add("hidden");
-          addMenu.setAttribute("aria-hidden", "true");
-
-          // Assemble payload the same way you currently do...
-          const payload = {
-            word,
-            lemma: span.dataset.lemma,
-            url: location.href,
-            meaning: cleanMeaning(short),
-            example: ex ? { text: ex.text, url: location.href } : undefined,
-            deck, // ← this is the deck you just selected
-          };
-
-          chrome.runtime.sendMessage({ type: "ADD_VOCAB", payload }, async (res) => {
-            tip.querySelector(".lexi-source").textContent = "Added ✓";
-            setTimeout(hideTip, 800);
-
-            // ➜ After successful add, open Side Panel
-            try {
-              await chrome.runtime.sendMessage({ type: "OPEN_SIDEPANEL" });
-            } catch { }
-          });
-
-        // ======== Event: Example buttons ========
-        if (ex) {
-          tip.querySelector(".ex-say")?.addEventListener("click", (ev) => {
-            ev.stopPropagation();
-            speakSentence?.(ex.text); // if you have implemented speakSentence
-          });
-
-          tip.querySelector(".ex-copy")?.addEventListener("click", async (ev) => {
-            ev.stopPropagation();
-            try {
-              await navigator.clipboard.writeText(ex.text);
-              const btn = ev.currentTarget;
-              const old = btn.textContent;
-              btn.textContent = "✓ Copied";
-              setTimeout(() => (btn.textContent = old), 1000);
-            } catch { }
-          });
-        }
-
-  // Close
-  document.getElementById("lexi-close").onclick = hideTip;
-
-        // ======== Hover auto-translation (only used if prewarmed; won't create translator here) ========
-  tip.dataset.word = word;                   // Remember which word this tooltip is for
-        const mySeq = ++__lexiHoverSeq;           // increment sequence to avoid races
-        chrome.storage.local.get({ targetLang: "zh-CN" }, async ({ targetLang }) => {
-          // Cache hit -> render directly
-          const cacheKey = `${word.toLowerCase()}|${targetLang}`;
-          const cached = __lexiTransCache.get(cacheKey);
-          if (cached && mySeq === __lexiHoverSeq) {
-            appendTranslationToTip(cached);
-            return;
-          }
-
-          try {
-            // Reuse only when already prewarmed (don't create): requireGesture:false
-            const tr = await getOrCreateTranslator(targetLang, { requireGesture: false });
-            if (!tr) return; // Not prewarmed yet: fail silently; user click can create
-
-            const r = await tr.translate(word);
-            const t = r?.translation || "";
-            if (t && mySeq === __lexiHoverSeq) {
-              __lexiTransCache.set(cacheKey, t);
-              appendTranslationToTip(t);
-            }
-          } catch (err) {
-            // Fail silently: in hover scenario don't open Google Translate, just don't show translation
-          }
-        });
-
-        showTipNear(span);
-      });
-    });
-  }
-
-  function onLeave() {
-    // Keep tooltip if mouse moves into it
-    // (do nothing; close via × or clicking outside)
-  }
-  
-  function onClickWord(e) {
-    if (typeof chrome === 'undefined' || !chrome.runtime || !chrome.runtime.id) return;
-
-    const span = e.currentTarget;
-    e.preventDefault(); e.stopPropagation();
-
-    const word = span.textContent?.trim();
-    if (!word) return;
-
-  // Debug logs: can keep
-    console.log('[Lexi] click word:', word);
-    console.log('[Lexi] Translator in self?', 'Translator' in self);
-    console.log('[Lexi] top frame?', window === window.top);
-    console.log('[Lexi] userActivation?', navigator.userActivation?.isActive);
-
-    if (tip.style.display === "none") {
-      try { onEnter({ currentTarget: span }); } catch { }
-    }
-
-    chrome.storage.local.get({ targetLang: "zh-CN" }, async (res) => {
-      const tgt = res.targetLang || "zh-CN";
-
-      let timedOut = false;
-      const timer = setTimeout(() => {
-        timedOut = true;
-        console.warn('[Lexi] fallback -> Google Translate (timeout)');
-        openGoogleTranslateFallback(word, tgt);
-      }, 600);
-
-      try {
-        console.log('[Lexi] creating/using translator for', tgt);
-        const translator = await getOrCreateTranslator(tgt, { requireGesture: true });
-        if (!translator) {
-          clearTimeout(timer);
-          if (!timedOut) {
-            console.warn('[Lexi] no translator instance -> fallback');
-            openGoogleTranslateFallback(word, tgt);
-          }
-          return;
-        }
-
-        console.log('[Lexi] calling translate()...');
-        const result = await translator.translate(word);
-        clearTimeout(timer);
-        if (timedOut) return;
-
-        const translation = result?.translation || result || "";
-        console.log('[Lexi] translate() result:', result);
-
-        if (!translation) {
-          console.warn('[Lexi] empty translation -> fallback');
-          openGoogleTranslateFallback(word, tgt);
-          return;
-        }
-        appendTranslationToTip(translation);
-      } catch (err) {
-        clearTimeout(timer);
-        console.error('[Lexi] Translator error:', {
-          name: err?.name, message: err?.message, stack: err?.stack
-        });
-        if (!timedOut) openGoogleTranslateFallback(word, tgt);
+      if (node.parentElement?.closest(ignored)) continue;
+      for (const match of node.data.matchAll(/\b[A-Za-z]+(?:[-'][A-Za-z]+)*\b/g)) {
+        const word = match[0].toLowerCase();
+        if (!gre.has(word) || known.has(word)) continue;
+        const range = document.createRange();
+        range.setStart(node, match.index);
+        range.setEnd(node, match.index + match[0].length);
+        marks.add(range);
+        if (!matches.has(node)) matches.set(node, []);
+        matches.get(node).push(range);
       }
-    });
-  }
-
-  function showTipNear(el) {
-    const r = el.getBoundingClientRect();
-    tip.style.display = "block";
-    tip.style.position = "fixed";
-    tip.style.left = Math.min(r.left, window.innerWidth - 240) + "px";
-    tip.style.top = (r.bottom + 8) + "px";
-  }
-
-  function hideTip() {
-    tip.style.display = "none";
-  }
-  
-  
-    // Clicking outside the page closes the tooltip
-    // On page click: if a highlighted word was clicked -> translate; otherwise clicking outside closes the tooltip
-  document.addEventListener("click", (e) => {
-    if (!tip.contains(e.target)) hideTip();
-  }, true);
-
-  // New: close tooltip with Esc key
-  document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") hideTip();
-  }, true);
-  // ── Optional: periodically detect lost extension context and warn to refresh (runs every 5s)
-  setInterval(() => {
-    // Typical failure signs: chrome.runtime missing or no id
-    if (typeof chrome === 'undefined' || !chrome.runtime || !chrome.runtime.id) {
-      console.warn('[Lexi] extension context lost. Please refresh this page.');
-  // You may auto-refresh (enable with caution): location.reload();
     }
-  }, 5000);
-
-}
-
-// —— First click prewarms translator (runs once) ——
-(function setupPrewarmOnce() {
-  async function prewarmOnce() {
-    document.removeEventListener('click', prewarmOnce, true);
-    try {
-      const { targetLang } = await chrome.storage.local.get({ targetLang: 'zh-CN' });
-      await getOrCreateTranslator(targetLang, { requireGesture: true }); // allow creation
-      console.debug('[Lexi] Translator prewarmed');
-    } catch { }
+    marked = matches;
+    CSS.highlights.set(highlightName, marks);
   }
-  document.addEventListener('click', prewarmOnce, true);
+
+  function scheduleHighlight() {
+    clearTimeout(refreshTimer);
+    refreshTimer = setTimeout(highlight, 150);
+  }
+
+  const observer = new MutationObserver(scheduleHighlight);
+  async function setHighlights(value) {
+    if (value) {
+      gre ||= new Set(await request({ type: 'GRE_WORDS' }));
+      known = new Set((await chrome.storage.local.get('known')).known || []);
+      enabled = true;
+      highlight();
+      observer.observe(document.body, { childList: true, subtree: true, characterData: true });
+    } else {
+      enabled = false;
+      observer.disconnect();
+      clearTimeout(refreshTimer);
+      CSS.highlights.delete(highlightName);
+      marked.clear();
+    }
+    return enabled;
+  }
+
+  document.addEventListener('click', event => {
+    if (event.target === host) return;
+    closeCard();
+    if (!enabled || event.defaultPrevented || event.target.closest?.('a, button, [role="button"], [contenteditable]') ||
+      !getSelection()?.isCollapsed) return;
+    const caret = document.caretRangeFromPoint(event.clientX, event.clientY);
+    if (!caret) return;
+    const match = marked.get(caret.startContainer)?.find(range =>
+      range.startOffset <= caret.startOffset && range.endOffset >= caret.startOffset &&
+      [...range.getClientRects()].some(rect =>
+        rect.left <= event.clientX && rect.right >= event.clientX && rect.top <= event.clientY && rect.bottom >= event.clientY));
+    if (match) showCard(match.toString(), match);
+  });
+  document.addEventListener('keydown', event => { if (event.key === 'Escape') closeCard(); });
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (enabled && area === 'local' && changes.known) {
+      known = new Set(changes.known.newValue || []);
+      scheduleHighlight();
+    }
+  });
+  chrome.runtime.onMessage.addListener((message, _sender, reply) => {
+    if (message.type === 'HIGHLIGHT_STATUS') reply(enabled);
+    if (message.type === 'SHOW_SELECTION') {
+      const selection = getSelection();
+      const range = selection?.rangeCount && selection.toString().trim() === message.text.trim()
+        ? selection.getRangeAt(0).cloneRange() : null;
+      showCard(message.text, range);
+      reply(true);
+    }
+    if (message.type === 'SET_HIGHLIGHTS') {
+      setHighlights(message.enabled).then(
+        active => reply({ ok: true, enabled: active }),
+        error => reply({ ok: false, error: error.message }),
+      );
+      return true;
+    }
+  });
 })();

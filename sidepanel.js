@@ -1,359 +1,175 @@
-// sidepanel.js — unified, schema-compatible panel (play/open/remove/export)
-(async function () {
-  const list = document.getElementById("list");
+import { deckLabel, normalizeEntry } from './vocab.mjs';
 
-  // --- utils: normalize a vocab item from mixed schemas ---
-  function norm(v, i) {
-    const surface =
-      v.word || v.surface || v.lemma || v.term || "(unknown)";
-    const lemma =
-      v.lemma || v.word || v.surface || "";
-    const meaning =
-      v.meaning ||
-      v.meanings?.[0]?.short ||
-      v.meanings?.[0]?.gloss ||
-      v.short ||
-      "";
-    const url =
-      v.url || v.sourceUrl || v.sourceUrls?.[0] || "";
-    // stable id for remove; fall back to old id or derive one
-    const id = v.id ?? `${lemma || surface}-${i}`;
-    return { surface, lemma, meaning, url, id, raw: v };
+const list = document.querySelector('#list');
+const status = document.querySelector('#status');
+const search = document.querySelector('#search');
+const review = document.querySelector('#review');
+const exportButton = document.querySelector('#export');
+const clearButton = document.querySelector('#clear');
+let entries = [];
+let reviewing = false;
+
+function element(tag, text, parent) {
+  const node = document.createElement(tag);
+  if (text) node.textContent = text;
+  parent.append(node);
+  return node;
+}
+
+function button(text, parent, action) {
+  const node = element('button', text, parent);
+  node.type = 'button';
+  node.addEventListener('click', action);
+  return node;
+}
+
+async function mutate(message) {
+  try {
+    const result = await chrome.runtime.sendMessage(message);
+    if (!result?.ok) throw new Error(result?.error);
+    status.textContent = '';
+  } catch {
+    status.textContent = 'Could not update vocabulary. Try again.';
   }
+}
 
-  // --- TTS ---
-  function play(word) {
-    try {
-      const u = new SpeechSynthesisUtterance(word);
-      u.lang = "en-US";
-      u.rate = 0.95;
-      const voices = speechSynthesis.getVoices();
-      const pick =
-        voices.find(v => v.lang.startsWith("en") && /female|samantha|victoria|allison/i.test(v.name)) ||
-        voices.find(v => v.lang.startsWith("en")) ||
-        voices[0];
-      if (pick) u.voice = pick;
-      speechSynthesis.cancel();
-      speechSynthesis.speak(u);
-    } catch (e) {
-      console.warn("[Lexi] TTS failed:", e);
-    }
+function speak(text) {
+  const voice = speechSynthesis.getVoices().find(item => item.localService && item.lang.startsWith('en'));
+  if (!voice) {
+    status.textContent = 'No local English voice is available.';
+    return;
   }
+  const utterance = new SpeechSynthesisUtterance(text);
+  utterance.voice = voice;
+  speechSynthesis.cancel();
+  speechSynthesis.speak(utterance);
+}
 
-  // --- load/save ---
-  async function load() {
-    const { vocab = [] } = await chrome.storage.local.get({ vocab: [] });
-    render(vocab);
-  }
-
-  async function save(vocab) {
-    await chrome.storage.local.set({ vocab });
-  }
-
-  async function removeByIndex(idx) {
-    const { vocab = [] } = await chrome.storage.local.get({ vocab: [] });
-    if (idx >= 0 && idx < vocab.length) {
-      vocab.splice(idx, 1);
-      await save(vocab);
-      render(vocab);
-    }
-  }
-
-  async function clearAll() {
-    await save([]);
-    render([]);
-  }
-
-  function exportJSON(vocab) {
-    const blob = new Blob([JSON.stringify(vocab, null, 2)], {
-      type: "application/json",
-    });
-    const url = URL.createObjectURL(blob);
-    const a = Object.assign(document.createElement("a"), {
-      href: url,
-      download: "lexilearn-vocab.json",
-    });
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
-  }
-
-  // --- render ---
-  // Clean old placeholder prefix "Meaning (offline demo): ..."
-  function cleanMeaning(s) {
-    if (!s) return "";
-    return String(s).replace(/^Meaning\s*\(.*?\)\s*:\s*/i, "").trim();
-  }
-
-  // Replace your current function render(vocab) { … } with this implementation
-  function render(vocab) {
-    ensureStyles();
-    const el = document.getElementById('list');
-
-  // Header (reuses your previous export/clear buttons)
-    const header = `
-      <div class="sp-head">
-        <div class="sp-title">
-          <h2>My Vocabulary</h2>
-        </div>
-        <div class="sp-actions">
-          <button id="sp-export">Export</button>
-          <button id="sp-clear">Clear All</button>
-        </div>
-      </div>
-    `;
-
-    if (!vocab || !vocab.length) {
-      el.innerHTML = header + '<p style="color:#6b7280">No words yet. Hover a word and click <b>＋ Add</b>.</p>';
-      bindHeader([], vocab);
-      return;
-    }
-
-  // —— Grouping: default → My deck; listening → Listening deck; others use original name ——
-    const groups = {};
-    for (let i = 0; i < vocab.length; i++) {
-      const v = vocab[i];
-      const raw = v.deck || 'default';
-      const name = raw === 'default' ? 'My deck'
-        : raw === 'listening' ? 'Listening deck'
-          : raw;
-  (groups[name] ||= []).push({ v, i }); // record original index i for remove/play convenience
-    }
-
-  // HTML escape utility (keeps your original style)
-    const escapeHTML = s => String(s ?? "")
-      .replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-
-  // Assemble each row (reuses your structure/button classes so event bindings still work)
-    const sectionHTML = Object.entries(groups).map(([name, items]) => {
-      const rows = items.map(({ v, i }) => {
-        const wordHtml = `<div class="word">${escapeHTML(v.surface || v.lemma || "")}</div>`;
-  // Meaning: strip the "Meaning (offline demo): ..." prefix
-        const m = cleanMeaning(v.meaning);
-        const metaHtml = m ? `<div class="meta">${escapeHTML(m)}</div>` : "";
-
-  // Examples: show up to 2; keep read & copy buttons (remove links)
-        const exList = (v.examples || v.raw?.examples || []).slice(0, 2);
-        const exHtml = exList.map((e, j) => `
-        <div class="ex-row" data-j="${j}">
-          <span class="ex-text">${escapeHTML(e.text || "")}</span>
-          <span class="ex-ops">
-            <button class="btn ex-say"  title="Read aloud">🔈</button>
-            <button class="btn ex-copy" title="Copy">📋</button>
-          </span>
-        </div>
-      `).join("");
-        const exBlock = exHtml ? `<div class="ex-list">${exHtml}</div>` : "";
-
-  // Ops area: pronounce / open source (if URL) / remove
-        const ops = `
-        <div class="ops">
-          <button class="btn play" title="Pronounce">🔈</button>
-          ${v.url ? `<button class="btn open" title="Open source">🔗</button>` : ""}
-          <button class="btn del"  title="Remove">🗑</button>
-        </div>
-      `;
-
-        return `
-        <div class="row" data-i="${i}">
-          <div class="w">
-            ${wordHtml}
-            ${metaHtml}
-            ${exBlock}
-          </div>
-          ${ops}
-        </div>
-      `;
-      }).join("");
-
-  // A small title for each group
-      return `
-      <h3 class="sp-group">${escapeHTML(name)}</h3>
-      ${rows}
-    `;
-    }).join("");
-
-    el.innerHTML = header + sectionHTML;
-
-  // Bind header (export/clear)
-    bindHeader(vocab, vocab);
-
-  // —— Inline event bindings: reuse original logic —— //
-  // Pronunciation (play)
-    el.querySelectorAll(".row .play").forEach(b => {
-      b.onclick = (e) => {
-        const i = +e.currentTarget.closest(".row").dataset.i;
-        const item = vocab[i];
-        play(item.surface || item.lemma);
-      };
-    });
-
-  // Open source (keep button only; list no longer shows long URLs)
-    el.querySelectorAll(".row .open").forEach(b => {
-      b.onclick = (e) => {
-        const i = +e.currentTarget.closest(".row").dataset.i;
-        const item = vocab[i];
-        if (item.url) chrome.tabs.create({ url: item.url });
-      };
-    });
-
-  // Remove
-    el.querySelectorAll(".row .del").forEach(b => {
-      b.onclick = async (e) => {
-        const i = +e.currentTarget.closest(".row").dataset.i;
-        await removeByIndex(i);
-      };
-    });
-
-  // Example: read aloud
-    el.querySelectorAll(".row .ex-say").forEach(b => {
-      b.onclick = (e) => {
-        const row = e.currentTarget.closest(".row");
-        const i = +row.dataset.i;
-        const j = +e.currentTarget.closest(".ex-row").dataset.j;
-        const ex = (vocab[i].examples || vocab[i].raw?.examples || [])[j];
-        if (ex?.text) play(ex.text);
-      };
-    });
-
-  // Example: copy
-    el.querySelectorAll(".row .ex-copy").forEach(b => {
-      b.onclick = async (e) => {
-        const row = e.currentTarget.closest(".row");
-        const i = +row.dataset.i;
-        const j = +e.currentTarget.closest(".ex-row").dataset.j;
-        const ex = (vocab[i].examples || vocab[i].raw?.examples || [])[j];
-        if (!ex?.text) return;
+function renderEntry(entry, group) {
+  const card = element('article', '', group);
+  const title = element('strong', entry.surface, card);
+  const meaning = entry.meanings.map(({ short }) => short).join(' · ');
+  const answer = element('p', meaning || 'No meaning saved.', card);
+  answer.hidden = reviewing;
+  title.hidden = reviewing;
+  for (const example of entry.examples) {
+    const text = reviewing && entry.surface ? example.text.replace(
+      new RegExp(entry.surface.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), '____',
+    ) : example.text;
+    const sentence = element('blockquote', text, card);
+    if (!reviewing) {
+      const exampleActions = element('div', '', sentence);
+      exampleActions.className = 'actions';
+      button('Listen to sentence', exampleActions, () => speak(example.text));
+      button('Copy', exampleActions, async () => {
         try {
-          await navigator.clipboard.writeText(ex.text);
-          const btn = e.currentTarget;
-          const old = btn.textContent;
-          btn.textContent = "✓";
-          setTimeout(() => (btn.textContent = old), 900);
-        } catch { }
-      };
+          await navigator.clipboard.writeText(example.text);
+          status.textContent = 'Sentence copied.';
+        } catch {
+          status.textContent = 'Could not copy the sentence.';
+        }
+      });
+      addSourceLink(example.url, 'Sentence source', exampleActions);
+    }
+  }
+  const actions = element('div', '', card);
+  actions.className = 'actions';
+  if (reviewing) {
+    if (!entry.examples.length) title.hidden = false;
+    button('Show answer', actions, event => {
+      title.hidden = !title.hidden && entry.examples.length > 0;
+      answer.hidden = !answer.hidden;
+      event.currentTarget.textContent = answer.hidden ? 'Show answer' : 'Hide answer';
     });
+    return;
   }
-  
-  function bindHeader(items, rawVocab) {
-    document.getElementById("sp-export").addEventListener("click", async () => {
-      const { vocab = [] } = await chrome.storage.local.get({ vocab: [] });
-      const groups = {};
-      for (const v of vocab) {
-        const key = v.deck || "default";
-        (groups[key] ||= []).push(v);
+  button('Listen', actions, () => speak(entry.surface));
+  addSourceLink(entry.url, 'Open source', actions);
+  button('Remove', actions, () => mutate({ type: 'REMOVE_VOCAB', id: entry.id }));
+}
+
+function addSourceLink(url, label, parent) {
+  if (!/^https?:\/\//i.test(url)) return;
+  const link = element('a', label, parent);
+  link.href = url;
+  link.target = '_blank';
+  link.rel = 'noopener noreferrer';
+}
+
+function groups(items) {
+  const result = new Map();
+  for (const entry of items) {
+    if (!result.has(entry.deck)) result.set(entry.deck, []);
+    result.get(entry.deck).push(entry);
+  }
+  return result;
+}
+
+function render() {
+  list.replaceChildren();
+  exportButton.disabled = clearButton.disabled = !entries.length;
+  const query = search.value.trim().toLowerCase();
+  const shown = entries.filter(entry =>
+    [entry.surface, deckLabel(entry.deck), ...entry.meanings.map(item => item.short)]
+      .some(value => value.toLowerCase().includes(query)));
+  if (!shown.length) {
+    element('p', entries.length ? 'No matching words.' : 'Look up a word on a webpage to start your vocabulary.', list);
+    return;
+  }
+  for (const [deck, items] of groups(shown)) {
+    const group = element('section', '', list);
+    element('h2', deckLabel(deck), group);
+    items.forEach(entry => renderEntry(entry, group));
+  }
+}
+
+exportButton.addEventListener('click', () => {
+  try {
+    const workbook = XLSX.utils.book_new();
+    const usedNames = new Set();
+    for (const [deck, items] of groups(entries)) {
+      const base = deckLabel(deck).replace(/[\\/?:*\[\]]/g, '_').replace(/^'+|'+$/g, '') || 'Deck';
+      let name = base.slice(0, 31).replace(/'+$/, '');
+      for (let index = 2; usedNames.has(name.toLowerCase()); index++) {
+        const suffix = ` (${index})`;
+        name = base.slice(0, 31 - suffix.length) + suffix;
       }
-
-      const wb = XLSX.utils.book_new();
-
-      const toSheetName = (name) =>
-        String(name || "default").replace(/[\\\/\?\*\:\[\]]/g, "_").slice(0, 31);
-
-      for (const [deck, rows] of Object.entries(groups)) {
-        const data = rows.map(raw => {
-          const v = norm(raw); // reuse the normalization function defined above
-          return {
-            Word: v.surface || v.word || v.lemma || v.term || "",
-            Meaning: v.meaning || v.meanings?.[0]?.short || v.short || "",
-            Example: v.examples?.[0]?.text || "",
-            Deck: v.deck || "default",
-            SourceURL: v.url || v.sourceUrl || ""
-          };
-        });
-        const ws = XLSX.utils.json_to_sheet(data);
-        XLSX.utils.book_append_sheet(wb, ws, toSheetName(deck));
-      }
-      XLSX.writeFile(wb, "My_Vocabulary.xlsx");
-    });
-
-
-    document.getElementById("sp-clear").onclick = async () => {
-      const ok = confirm("Clear all saved words?");
-      if (!ok) return;
-      await chrome.storage.local.set({ vocab: [] });
-      // If you have an automatic refresh listener for VOCAB_UPDATED, you can send a message here:
-      // chrome.runtime.sendMessage({ type: 'VOCAB_UPDATED' });
-      // Then the page will call load()/render() to refresh
-      location.reload();
-    };
-
-  // —— Style injection (you already had this) ——
-  ensureStyles();
+      usedNames.add(name.toLowerCase());
+      const rows = items.flatMap(entry => (entry.examples.length ? entry.examples : [{}]).map(example => ({
+        Word: entry.surface, Meaning: entry.meanings.map(({ short }) => short).join(' · '),
+        Example: example.text || '', Deck: deckLabel(deck), SourceURL: example.url || entry.url,
+      })));
+      XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(rows), name);
+    }
+    XLSX.writeFile(workbook, 'My_Vocabulary.xlsx');
+    status.textContent = 'Exported vocabulary.';
+  } catch {
+    status.textContent = 'Could not export vocabulary.';
   }
+});
 
-  function ensureStyles() {
-    let style = document.getElementById("sp-style");
-    if (!style) {
-      style = document.createElement("style");
-      style.id = "sp-style";
-      document.head.appendChild(style);
-    }
+clearButton.addEventListener('click', () => {
+  if (confirm('Delete all saved vocabulary?')) mutate({ type: 'CLEAR_VOCAB' });
+});
+review.addEventListener('click', () => {
+  reviewing = !reviewing;
+  review.setAttribute('aria-pressed', String(reviewing));
+  review.textContent = reviewing ? 'Finish review' : 'Review';
+  render();
+});
+search.addEventListener('input', render);
 
-    style.textContent = `
-    /* Header area (title + actions) */
-    .sp-head {
-      display: flex; align-items: center; justify-content: space-between;
-      padding: 6px 0 10px; border-bottom: 1px solid #eee; margin-bottom: 12px;
-    }
-    .sp-title h2 { margin: 0; font-size: 18px; font-weight: 700; color: #111; }
-    .sp-actions { display: flex; gap: 10px; }
-    .sp-actions button {
-      font-size: 13px; border: 1px solid #e5e5e5; background: #fff;
-      border-radius: 10px; padding: 6px 12px; cursor: pointer;
-    }
-    .sp-actions button:hover { background: #f6f6f6; }
+function update(vocab) {
+  entries = vocab.map(normalizeEntry);
+  render();
+}
 
-    /* Group title (deck) — this is the .sp-group you previously put in HTML */
-    .sp-group {
-      margin: 14px 0 8px;
-      font: 600 14px/1.2 system-ui, Inter, ui-sans-serif;
-      color: #374151;
-    }
-
-    /* Each word row */
-    .row {
-      display: flex; align-items: flex-start; justify-content: space-between;
-      border-bottom: 1px solid #f2f2f2; padding: 10px 0;
-    }
-    .word { font-size: 15px; font-weight: 700; color: #111; margin-bottom: 4px; }
-    .meta { font-size: 13px; color: #444; margin-top: 2px; }
-    .ex-list { font-size: 13px; color: #555; margin-top: 6px; }
-    .ops { display: flex; align-items: center; gap: 8px; }
-    .btn, .lexi-btn {
-      border: 1px solid #e5e5e5; background: #fff; border-radius: 10px;
-      padding: 4px 10px; font-size: 12px; cursor: pointer;
-    }
-    .btn:hover, .lexi-btn:hover { background: #f6f6f6; }
-
-    /* Make layout a bit cleaner */
-    #list .row .word { font-size: 16px; font-weight: 700; margin-bottom: 2px; }
-    #list .row .meta { font-size: 13px; color: #4b5563; margin-bottom: 6px; }
-    #list .ex-list { margin-top: 4px; display: flex; flex-direction: column; gap: 4px; }
-    #list .ex-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-    #list .ex-text { font-size: 12px; color: #374151; flex: 1; }
-    #list .ex-ops .btn { padding: 2px 6px; }
-  `;
-  }
-
-  function escapeHTML(s) {
-    return String(s || "")
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;");
-  }
-
-  // live refresh on storage changes
+try {
+  const { vocab = [] } = await chrome.storage.local.get('vocab');
+  update(vocab);
   chrome.storage.onChanged.addListener((changes, area) => {
-    if (area === "local" && changes.vocab) {
-      const vocab = changes.vocab.newValue || [];
-      render(vocab);
-    }
+    if (area === 'local' && changes.vocab) update(changes.vocab.newValue || []);
   });
-
-  // init
-  await load();
-
-  chrome.runtime.onMessage.addListener((msg) => {
-    if (msg.type === "VOCAB_UPDATED") load();
-  });
-
-})();
+} catch {
+  status.textContent = 'Could not load vocabulary.';
+}

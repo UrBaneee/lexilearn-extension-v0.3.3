@@ -1,70 +1,25 @@
-# LexiLearn – On-page Vocabulary Coach (Chrome 扩展)
+# LexiLearn 网页生词本
 
-高亮网页上的英文单词，查看释义与例句，并一键加入生词本。右侧 Side Panel 可分组管理与 **导出 XLSX（每个 deck 一个 sheet）**。
+[English](README.md) · [下载最新版](https://github.com/UrBaneee/lexilearn-extension-v0.3.3/releases/latest)
 
-<img width="1371" height="811" alt="image" src="https://github.com/user-attachments/assets/aac5bb04-f42d-42a7-b86c-00c3e22548d4" />
+LexiLearn 是一个 Chrome 扩展。读英文网页时，可以在原地查词，把释义、原句和来源一起保存到生词本。
 
+## 安装
 
----
+1. 从 GitHub Releases 下载 ZIP 并解压。
+2. 在 Chrome 138 或更高版本打开 `chrome://extensions`，开启「开发者模式」。
+3. 选择「加载已解压的扩展程序」，选中包含 `manifest.json` 的文件夹。
+4. 固定扩展图标，方便打开设置和生词本。
 
-## ✨ 功能亮点
+## 使用
 
-- 悬停/点击显示词义、例句与操作按钮
-- **+ Add** 下拉选择目标 deck（支持新建）
-- **Side Panel** 中按 deck 分组显示，支持朗读、复制、打开来源、删除
-- **Export** 导出为 `My_Vocabulary.xlsx`（每个 deck -> 一个 sheet）
-- 支持**高亮模式**：`basic`（默认）/ `gre`
-- 可自带词表：`assets/lists/*.txt`（如 `gre.txt`）
+- 在网页选中单词或短语，右键选择 **Look up in LexiLearn**。
+- 点 **Explain in context** 查看词在当前句子里的含义，或点 **Translate** 查单词翻译。保存前可以修改释义。
+- 从扩展图标为当前页面开启 GRE 高亮。点击高亮词可查词，点 **I know this** 可在以后的 GRE 高亮中隐藏这个词。
+- 打开 **Vocabulary** 搜索词本、隐藏答案复习、使用本地语音朗读，或导出 Excel。
 
----
+Chrome 内置 AI 的可用性取决于浏览器、设备和目标语言，首次使用可能需要下载模型或语言包。如果目标语言暂时不可用，可以保留英文的上下文释义。端侧查词不可用时，也可以手动填写释义，或主动打开 Google Translate。
 
-## 📦 安装（开发模式 / 直接可用）
+## 数据处理
 
-1. 点击 **Code → Download ZIP** 下载并解压本仓库。
-2. 打开 `chrome://extensions/`，右上角打开 **Developer mode**。
-3. 点击 **Load unpacked**，选择解压后的文件夹。
-4. 把扩展 **Pin** 到工具栏（方便使用）。
-
-> 如果 Side Panel 没自动打开，手动点击右上角侧边栏图标或扩展图标即可。
-
----
-
-## 🧪 使用方法
-
-- 在网页上**选择**或**点击**英文单词，浮层会出现词义与操作按钮。
-- 点击 **+ Add** 选择目标 deck（或 `+ New deck...`）。
-- 打开右侧 **Side Panel**（第一次可能需要手动开启）：
-  - 顶部 **Export** 导出为 `My_Vocabulary.xlsx`；
-  - **Clear All** 清空所有生词（谨慎操作）。
-- **切换高亮模式**：
-  - 默认 `basic` 模式；
-  - 需要 GRE 词表高亮：将 `assets/lists/gre.txt` 替换成你的 GRE 词表（UTF-8，每行一个词）并**重新加载扩展**；
-  - 运行时可用 DevTools 临时切换：
-    ```js
-    chrome.storage.local.set({ mode: 'gre' })     // 切 GRE
-    // chrome.storage.local.set({ mode: 'basic' }) // 切回 basic
-    ```
-
----
-
-## 🗂 目录结构
-
-```text
-lexilearn-extension/
-├─ assets/
-│  ├─ icons/               # 16/48/128 图标
-│  └─ lists/               # 可选词表（gre.txt）
-├─ vendor/
-│  └─ xlsx/
-│     └─ xlsx.full.min.js  # 本地打包的 XLSX 库（sidepanel.html 里已引入）
-├─ background.js
-├─ content.js
-├─ sidepanel.html
-├─ sidepanel.js
-├─ popup.html              # 如使用
-├─ popup.js                # 如使用
-├─ styles.css              # 如使用
-├─ manifest.json
-├─ README.md
-├─ LICENSE
-└─ .gitignore
+生词、例句、来源网址、设置和已认识的词保存在 Chrome 扩展的本地存储中。内置 AI 在设备上处理查词文本。LexiLearn 没有服务端、账号或分析追踪。主动点击 **Open Google Translate** 时，选中的单词或短语会发送给 Google Translate。Excel 导出生成本地文件。

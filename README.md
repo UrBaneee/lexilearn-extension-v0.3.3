@@ -1,67 +1,29 @@
-# LexiLearn – On-page Vocabulary Coach (Chrome Extension)
+# LexiLearn
 
-LexiLearn helps you highlight English words directly on any webpage, view definitions and examples, and save them into your personal vocabulary list.  
-The saved words are organized by decks and can be exported to **Excel (.xlsx)** in one click.
-<img width="2742" height="1622" alt="image" src="https://github.com/user-attachments/assets/91b65b1e-b8c9-4d0a-8aeb-0bba0f0236d4" />
+[中文说明](README%20-%20CN.md) · [Download the latest release](https://github.com/UrBaneee/lexilearn-extension-v0.3.3/releases/latest)
 
----
+LexiLearn is a Chrome extension for reading in English. Look up a word on the page and save its meaning, original sentence, and source in a vocabulary deck.
 
-## ✨ Features
+## Install
 
-- Instantly highlight and translate English words on any webpage  
-- Click **+ Add** to save words into decks (supports multiple decks)  
-- Built-in **Side Panel** to view, edit, and export your vocabulary  
-- Export to `My_Vocabulary.xlsx` – one deck per sheet  
-- Supports two highlight modes: `basic` and `gre`  
-- Fully offline after installation (no external API calls)
+1. Download the extension ZIP from Releases and unzip it.
+2. In Chrome 138 or later, open `chrome://extensions` and turn on Developer mode.
+3. Choose **Load unpacked** and select the folder containing `manifest.json`.
+4. Pin LexiLearn to make its settings and vocabulary panel easy to reach.
 
----
+## Read and review
 
-## 🧭 Quick Start
+- Select a word or short phrase on a webpage, right-click, and choose **Look up in LexiLearn**.
+- Choose **Explain in context** to look up the sense used in the sentence, or **Translate** for a word translation. Edit the result before saving if needed.
+- From the toolbar popup, enable **GRE highlights** for the current page. Click a highlighted word to look it up. **I know this** hides that word from future GRE highlights.
+- Open **Vocabulary** from the toolbar popup to search your decks, review with answers hidden, listen using a local voice, or export an Excel workbook.
 
-1. **Download & Install**
-   - Click **Code → Download ZIP** to download this repository.
-   - Unzip the folder.
-   - Open Chrome and navigate to `chrome://extensions/`.
-   - Enable **Developer mode** (top right).
-   - Click **Load unpacked** and select the unzipped folder.
+Chrome's on-device AI depends on the browser, device, and language. Chrome may download a model or language pack on first use. If the requested explanation language is unavailable, LexiLearn can keep the English contextual definition. If on-device lookup is unavailable, save a note manually or explicitly open Google Translate.
 
-2. **Pin the Extension**
-   - Click the puzzle icon in Chrome’s toolbar.
-   - Pin **LexiLearn – On-page Vocabulary Coach** for quick access.
+## Data
 
-3. **Try it Out**
-   - Open any English webpage.
-   - Select a word → click the floating **+ Add** button.
-   - Open the **Side Panel** to view your saved vocabulary.
+LexiLearn stores vocabulary, example sentences, source URLs, settings, and known words in Chrome's local extension storage. Built-in AI processes lookup text on the device. LexiLearn has no server, account, or analytics. If you choose **Open Google Translate**, the selected word or phrase is sent to Google Translate. Excel export creates a local file.
 
----
+## Development
 
-## 📚 Vocabulary Management
-
-- **Add words**: Highlight or click a word → “+ Add”
-- **Decks**: Group words (e.g., “default”, “GRE”, “listening”)
-- **Export**: Click **Export** to download an Excel file
-  - Each deck appears as a separate sheet in `My_Vocabulary.xlsx`
-- **Clear**: Click **Clear All** to reset (deletes all saved words)
-
----
-
-## 🎛 Highlight Modes: Basic vs GRE
-
-LexiLearn supports two modes of word highlighting:
-
-| Mode  | Description |
-|-------|--------------|
-| `basic` | Default mode – highlights all common words |
-| `gre`   | Highlights only words found in your `assets/lists/gre.txt` file |
-
-### Switch mode manually
-You can switch between modes in the Chrome DevTools Console:
-
-```js
-// Switch to GRE mode
-chrome.storage.local.set({ mode: 'gre' });
-
-// Switch back to Basic mode
-chrome.storage.local.set({ mode: 'basic' });
+Run `npm test` for lookup and storage tests. GitHub Actions also runs an isolated Chromium test with deterministic model responses, covering contextual lookup, GRE highlights, saved vocabulary, review, and Excel export.
