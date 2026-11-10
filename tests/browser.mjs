@@ -74,6 +74,7 @@ test('looks up, saves, reviews and exports vocabulary in Chromium', { timeout: 6
         create: async () => ({ translate: async text => text === 'the edge of a river' ? '河岸' : '银行' }),
       };
     } });
+    await chrome.scripting.insertCSS({ target, files: ['highlights.css'] });
     await chrome.scripting.executeScript({ target, files: ['lookup.js', 'content.js'] });
   }, tabId);
   const message = data => worker.evaluate(({ tabId, data }) => chrome.tabs.sendMessage(tabId, data), { tabId, data });
@@ -129,6 +130,11 @@ test('looks up, saves, reviews and exports vocabulary in Chromium', { timeout: 6
   await sidepanel.getByRole('button', { name: 'Finish review' }).click();
   await sidepanel.getByRole('button', { name: 'Remove' }).click();
   await sidepanel.getByText('Look up a word on a webpage to start your vocabulary.').waitFor();
+  const writes = await sidepanel.evaluate(async () => Promise.all(['reading', 'writing'].map(word =>
+    chrome.runtime.sendMessage({ type: 'ADD_VOCAB', entry: { word } }))));
+  assert.equal(writes.every(result => result.ok), true);
+  await sidepanel.getByText('reading', { exact: true }).waitFor();
+  await sidepanel.getByText('writing', { exact: true }).waitFor();
   assert.deepEqual(errors, []);
   assert.deepEqual(panelErrors, []);
 });
